@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Movian Cookie Bridge</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main>
+    <h1>Movian Cookie Bridge</h1>
+
+    <label for="profile">Профиль</label>
+    <select id="profile"></select>
+
+    <label for="domain">Домен профиля</label>
+    <input id="domain" spellcheck="false" value="hdrezka.me">
+
+    <div class="row">
+      <div>
+        <label for="host">Movian host</label>
+        <input id="host" spellcheck="false" value="127.0.0.1">
+      </div>
+      <div>
+        <label for="port">Movian HTTP port</label>
+        <input id="port" inputmode="numeric" value="42000">
+      </div>
+    </div>
+
+    <label class="check">
+      <input id="allowLan" type="checkbox">
+      <span>Разрешить передачу по локальной сети без шифрования</span>
+    </label>
+    <p class="note">Осознанный риск: cookies идут по сети открытым текстом, Movian
+      принимает запись от любого устройства в сети. Только частные адреса
+      (192.168.x.x, 10.x.x.x, …); безопаснее — туннель на 127.0.0.1.</p>
+
+    <div class="buttons">
+      <button id="openSite" type="button">Открыть сайт</button>
+      <button id="send" type="button">Send to Movian</button>
+    </div>
+
+    <div class="buttons">
+      <button id="openMovian" class="secondary" type="button">Открыть в Movian</button>
+      <button id="clearSession" class="secondary" type="button">Очистить сессию</button>
+    </div>
+
+    <section>
+      <div class="metric">
+        <span>Cookies</span>
+        <strong id="cookieCount">-</strong>
+      </div>
+      <div class="metric">
+        <span>Movian</span>
+        <strong id="movianState">unknown</strong>
+      </div>
+      <div class="metric">
+        <span>Requests</span>
+        <strong id="requestCount">-</strong>
+      </div>
+    </section>
+
+    <pre id="status">Готово.</pre>
+
+    <div class="buttons">
+      <button id="refreshRequests" class="secondary" type="button">Refresh requests</button>
+      <button id="clearRequests" class="secondary" type="button">Clear requests</button>
+    </div>
+
+    <div class="buttons single">
+      <button id="captureAll" class="secondary" type="button">Захватывать запросы ко всем сайтам</button>
+    </div>
+
+    <pre id="requests">No captured requests yet.</pre>
+  </main>
+  <script src="lib/bridge-core.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
