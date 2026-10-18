@@ -2,21 +2,26 @@
 # Starts a private Movian M7 for a live check of the plugin: its own Xvfb
 # display, profile and cache under $LIVE_DIR, and the plugin installed from
 # a ZIP the way Movian installs plugins. Prints the PID and the HTTP port;
-# tools/live/stop.sh undoes all of it.
+# tools/live/stop.sh undoes all of it. A start that fails after Xvfb is up
+# stops what it started and exits non-zero.
 #
 #   tools/live/start.sh [plugin.zip]     (default: build one with package.sh)
 #
 #   MOVIAN_DIR   Movian M7 tree with build.debug/movian (required). Movian runs
 #                from there: its data root is the current directory.
-#   LIVE_DIR     state directory (default ${TMPDIR:-/tmp}/rutracker-live)
+#   LIVE_DIR     state directory (default ${TMPDIR:-/tmp}/rutracker-live);
+#                a relative one is made absolute here
 #   MOVIAN_ARGS  extra Movian arguments
 #
 # Another Movian may already hold :42000. This one takes whatever port
 # Movian picks, found by PID, and stop.sh stops only this PID.
 set -e
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+. "$ROOT/tools/live/lib.sh"
 MOVIAN_DIR=${MOVIAN_DIR:?set MOVIAN_DIR to a Movian M7 tree with build.debug/movian}
 LIVE_DIR=${LIVE_DIR:-${TMPDIR:-/tmp}/rutracker-live}
+# Absolute before anything changes directory: Movian runs from MOVIAN_DIR.
+case "$LIVE_DIR" in /*) ;; *) LIVE_DIR=$(pwd)/$LIVE_DIR ;; esac
 BIN=$MOVIAN_DIR/build.debug/movian
 
 [ -x "$BIN" ] || { echo "no Movian binary at $BIN (set MOVIAN_DIR)" >&2; exit 1; }
@@ -35,8 +40,21 @@ cp "$ZIP" "$LIVE_DIR/persistent/mrp/installed/rutracker@local.zip"
 D=90
 while [ -e "/tmp/.X11-unix/X$D" ] || [ -e "/tmp/.X$D-lock" ]; do D=$((D + 1)); done
 Xvfb ":$D" -screen 0 1280x720x24 -nolisten tcp > "$LIVE_DIR/xvfb.log" 2>&1 &
-echo $! > "$LIVE_DIR/xvfb.pid"
+XPID=$!
+echo $XPID > "$LIVE_DIR/xvfb.pid"
+echo "$D" > "$LIVE_DIR/xvfb.display"
 sleep 1
+
+# Everything below may fail. The PIDs and the display are the ones this run
+# started, so stopping them touches nothing else. The logs stay for reading.
+PID=
+abort() {
+  echo "$1" >&2
+  [ -z "$PID" ] || stop_pid "$PID" "--persistent $LIVE_DIR/persistent" || echo "Movian $PID still runs" >&2
+  stop_pid "$XPID" "Xvfb :$D " || echo "Xvfb $XPID still runs" >&2
+  rm -f "$LIVE_DIR/pid" "$LIVE_DIR/xvfb.pid" "$LIVE_DIR/xvfb.display" "$LIVE_DIR/port"
+  exit 1
+}
 
 cd "$MOVIAN_DIR"
 # shellcheck disable=SC2086
@@ -51,11 +69,11 @@ i=0
 while [ -z "$PORT" ] && [ $i -lt 30 ]; do
   sleep 1
   i=$((i + 1))
-  kill -0 $PID 2>/dev/null || { echo "Movian exited, see $LIVE_DIR/movian.log" >&2; exit 1; }
+  alive "$PID" || abort "Movian exited, see $LIVE_DIR/movian.log"
   for p in $(ss -ltnpH 2>/dev/null | grep "pid=$PID," | awk '{print $4}' | sed 's/.*://'); do
     if curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$p/"; then PORT=$p; break; fi
   done
 done
-[ -n "$PORT" ] || { echo "no HTTP port for pid $PID after 30 s" >&2; exit 1; }
+[ -n "$PORT" ] || abort "no HTTP port for pid $PID after 30 s"
 echo "$PORT" > "$LIVE_DIR/port"
 echo "pid $PID  port $PORT  display :$D  state $LIVE_DIR"

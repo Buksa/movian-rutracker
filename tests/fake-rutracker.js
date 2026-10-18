@@ -56,6 +56,8 @@ function emptySearch(page) {
  *   captcha: true     -> login answers with the captcha form
  *   loginPage: 'unrecognized' -> login answers 200 with a page that has
  *                        neither the error marker nor a redirect
+ *   pagerFailure: 'down' | 'challenge' -> the pager links (search_id=…) fail
+ *                        at the network level, or get the Cloudflare challenge
  */
 function server(options) {
     options = options || {};
@@ -65,6 +67,10 @@ function server(options) {
         if (options.down) return { error: 'Connection refused' };
         const u = new URL(req.url);
         if (u.hostname !== 'rutracker.org') return { status: 404, body: 'not found' };
+        if (options.pagerFailure && u.searchParams.has('search_id')) {
+            if (options.pagerFailure === 'down') return { error: 'Connection refused' };
+            return { status: 403, headers: { 'Content-Type': 'text/html; charset=UTF-8', 'cf-mitigated': 'challenge' }, body: fixture('cf-challenge.html') };
+        }
         /* Like the live site: Cloudflare challenges forum and tracker pages
          * without a valid cf_clearance + matching UA, but not index.php. */
         if (options.cloudflare && u.pathname !== '/forum/index.php' &&

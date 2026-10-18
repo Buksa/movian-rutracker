@@ -99,6 +99,43 @@ test('topicPage of an empty or broken page is empty, not an exception', function
     assert.strictEqual(t.next, null);
 });
 
+test('nextPage gives null on the last page, whose pager ends in a page number', function () {
+    /* The real pager of search-matrix.html on its last page: the "След." link
+     * of the bottom_info pager is gone and its last link is page 10. The page
+     * header has a second pager with the same link, which is left alone. */
+    const page = fixture('search-matrix.html');
+    const at = page.indexOf('<div class="bottom_info">');
+    const last = page.slice(0, at) + page.slice(at).replace(/&nbsp;&nbsp;<a class="pg" href="[^"]*">След\.<\/a>/, '');
+    assert.ok(page.slice(at).indexOf('След.') !== -1, 'the fixture has the link');
+    assert.strictEqual(last.slice(at).indexOf('След.'), -1, 'the link was removed');
+    assert.strictEqual(parser.nextPage(parser.parse(last), 'bottom_info'), null);
+});
+
+test('bookmarksPage tells a bookmarks page from a guest page or a challenge', function () {
+    assert.strictEqual(parser.bookmarksPage(fixture('bookmarks-empty.html')), true);
+    assert.strictEqual(parser.bookmarksPage(fixture('index-guest.html')), false);
+    assert.strictEqual(parser.bookmarksPage(fixture('cf-challenge.html')), false);
+    assert.strictEqual(parser.bookmarksPage(''), false);
+    /* A list with topics has the rows of a forum page, which bookmarks share. */
+    assert.strictEqual(parser.bookmarksPage(fixture('forum-7.html')), true);
+});
+
+section('business/auth');
+
+const LOGIN_FAILED = '<h4 class="warnColor1 tCenter mrg_16">Вы ввели неверное имя или пароль</h4>';
+
+test('a login answered by a redirect that carries the error marker is failed, not ok', function () {
+    const client = { login: function () { return { status: 302, text: LOGIN_FAILED, challenge: false }; } };
+    const auth = rt.require('./src/business/auth').create(client, parser);
+    assert.strictEqual(auth.login('user', 'wrong', null).status, 'failed');
+});
+
+test('a login answered by a bare redirect is ok', function () {
+    const client = { login: function () { return { status: 302, text: '', challenge: false }; } };
+    const auth = rt.require('./src/business/auth').create(client, parser);
+    assert.strictEqual(auth.login('user', 'secret', null).status, 'ok');
+});
+
 section('vendor/movian-cookie-bridge (Movian side)');
 
 /* A fresh runtime per test; sessions share it the way plugins share Movian. */

@@ -104,6 +104,14 @@ exports.searchResults = function (text) {
   return /id="tor-tbl"/.test(String(text || ''));
 };
 
+//  Is this a bookmarks.php page? An empty list says so in a message; a list
+//  with topics has the topic rows of a forum page, which bookmarks share. A
+//  challenge or a guest page has neither.
+exports.bookmarksPage = function (text) {
+  text = String(text || '');
+  return /У вас нет избранных тем/.test(text) || exports.topicRows(text, 'forum').length > 0;
+};
+
 //  The "След." (next) pager link inside the element with `containerClass`,
 //  as a path relative to /forum/, or null on the last page.
 exports.nextPage = function (dom, containerClass) {

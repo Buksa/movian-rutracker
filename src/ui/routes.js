@@ -198,6 +198,10 @@ exports.register = function (ctx) {
         nothingFound(result.loaded);
         return p.haveMore(false);
       }
+      if (!result.loaded) {
+        p.appendItem('', 'separator', {title: 'Следующая страница не загружена: сайт не вернул страницу'});
+        return p.haveMore(false);
+      }
       if (result.topics.length) {
         p.appendItem('', 'separator', {title: new RichText('Темы ' + colorStr(pageNum + 1, gray))});
       }
@@ -240,8 +244,16 @@ exports.register = function (ctx) {
       var result = catalog.bookmarks(url);
       p.loading = false;
       pageNum++;
+      if (!result.loaded) {
+        if (pageNum === 1) p.error('Закладки не загружены: сайт не вернул страницу закладок (сеть, Cloudflare или вход не выполнен)');
+        else p.appendItem('', 'separator', {title: 'Следующая страница не загружена: сайт не вернул страницу'});
+        return p.haveMore(false);
+      }
       if (result.topics.length) {
         p.appendItem('', 'separator', {title: new RichText('Темы ' + colorStr(pageNum, gray))});
+      }
+      else if (pageNum === 1) {
+        p.appendItem('', 'separator', {title: 'Закладок нет'});
       }
       result.topics.forEach(function (row) {
         appendTopic(p, row, ++topicCount, 'Посл. сообщение: ');
@@ -273,14 +285,14 @@ exports.register = function (ctx) {
       if (pageNum === 1) {
         p.appendItem(PREFIX + ':search:' + forumId + ':', 'search', {title: 'Поиск в разделе ' + title});
         if (result.subforums.length) p.appendItem('', 'separator', {title: 'Форумы'});
-      }
-      result.subforums.forEach(function (f) {
-        itemCount++;
-        p.appendItem(PREFIX + ':forum:' + f.id + ':0:' + encodeURIComponent(f.title), 'directory', {
-          title: new RichText(itemCount + ' | ' + f.title),
-          icon: icon.folder,
+        result.subforums.forEach(function (f) {
+          itemCount++;
+          p.appendItem(PREFIX + ':forum:' + f.id + ':0:' + encodeURIComponent(f.title), 'directory', {
+            title: new RichText(itemCount + ' | ' + f.title),
+            icon: icon.folder,
+          });
         });
-      });
+      }
       if (result.topics.length) {
         p.appendItem('', 'separator', {title: new RichText('Темы ' + colorStr(pageNum, gray))});
       }
@@ -352,21 +364,24 @@ exports.register = function (ctx) {
         appendRelease(t.post, 'magnet');
         if (t.magnet) appendLink(t.magnet, 'Магнет-ссылка');
         p.appendItem('', 'separator', {title: new RichText('Сиды: ' + coloredStr(t.seeders, green) + ' | Личи: ' + coloredStr(t.leechers, red))});
-        p.appendItem('', 'separator', {title: 'Поиск:'});
-        var query = title.replace(/\[(.*)/g, '').trim().replace(/\((.*)/g, '').trim().replace(/\/(.*)/g, '').trim()
-          .replace(/\|(.*)/g, '').trim().replace(/\\(.*)/g, '').trim().replace(/<.*?>/g, '').trim();
+        //  The query is the title's name: without its [tags], cut at the first
+        //  ( / | \, without tags. A title that leaves nothing gets no shortcuts.
+        var query = title.replace(/\[[^\]]*\]/g, '').replace(/[(\/|\\].*$/, '').replace(/<.*?>/g, '').trim();
         var plain = query.replace(/:/g, '').trim();
-        [
-          [PREFIX + ':search:0:' + plain, 'Найти в плагине'],
-          ['search:' + plain, 'Найти в мовиан'],
-          ['Rutube:search:' + plain, 'Найти на Rutube'],
-          ['youtube:search:' + plain, 'Найти на YouTube'],
-          ['Collaps:search:' + query, 'Найти на Collaps'],
-          ['HDVB:search:' + query, 'Найти на HDVB'],
-          ['KPID:search:' + plain, 'Найти на KPID'],
-        ].forEach(function (s) {
-          p.appendItem(s[0], 'directory', {title: s[1], icon: icon.arrow});
-        });
+        if (plain) {
+          p.appendItem('', 'separator', {title: 'Поиск:'});
+          [
+            [PREFIX + ':search:0:' + plain, 'Найти в плагине'],
+            ['search:' + plain, 'Найти в мовиан'],
+            ['Rutube:search:' + plain, 'Найти на Rutube'],
+            ['youtube:search:' + plain, 'Найти на YouTube'],
+            ['Collaps:search:' + query, 'Найти на Collaps'],
+            ['HDVB:search:' + query, 'Найти на HDVB'],
+            ['KPID:search:' + plain, 'Найти на KPID'],
+          ].forEach(function (s) {
+            p.appendItem(s[0], 'directory', {title: s[1], icon: icon.arrow});
+          });
+        }
       }
       if (t.comments.length) {
         p.appendItem('', 'separator', {title: new RichText('Комментарии ' + colorStr(pageNum, gray))});
@@ -454,7 +469,7 @@ exports.register = function (ctx) {
 
   new page.Route(PREFIX + ':captchalogin:(.*):(.*):(.*)', function (p, image, capSid, capCodeName) {
     image = decodeURIComponent(image);
-    if (!/^https?:\/\//.test(image)) image = 'http://' + image;
+    if (!/^https?:\/\//.test(image)) image = 'https://' + image;
     setup(p, 'Ввод капчи для входа на ' + TTL);
     p.type = 'directory';
     p.model.contents = 'list';
@@ -479,7 +494,8 @@ exports.register = function (ctx) {
   });
 
   new page.Route(PREFIX + ':captcha:(.*):(.*):(.*)', function (p, image, capSid, capCodeName) {
-    image = 'http://' + decodeURIComponent(image);
+    image = decodeURIComponent(image);
+    if (!/^https?:\/\//.test(image)) image = 'https://' + image;
     setup(p, 'Ввод капчи для входа на ' + TTL);
     p.type = 'directory';
     p.model.contents = 'list';

@@ -33,9 +33,10 @@ exports.create = function (client, parser) {
       return {subforums: parser.subforums(text), topics: forumTopics(text), next: next(text, 'bottom_info')};
     },
 
+    //  loaded: false when the site sent no bookmarks page (network, Cloudflare, guest).
     bookmarks: function (url) {
       var text = client.page(url);
-      return {topics: forumTopics(text), next: next(text, 'bottom_info')};
+      return {loaded: parser.bookmarksPage(text), topics: forumTopics(text), next: next(text, 'bottom_info')};
     },
 
     //  loaded: false when the site sent no result page (network, Cloudflare).

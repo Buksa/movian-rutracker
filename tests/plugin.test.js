@@ -7,6 +7,7 @@
 'use strict';
 
 const assert = require('assert');
+const fs = require('fs');
 const path = require('path');
 const { loadPlugin, text } = require('./harness/movian');
 const { test, section, finish } = require('./harness/tap');
@@ -143,6 +144,45 @@ test(':forum lists subforums and topics', function () {
     assert.strictEqual(page.more, false, 'f=7 has a single page');
 });
 
+/* forum-7.html with the real result pager of search-matrix.html in its
+ * bottom_info: page 1 links on with "След." to viewforum.php?f=7&start=50,
+ * and the page at start=50 is the last one (no "След." link). */
+function forumPagerServer() {
+    const base = fake.server();
+    const source = fs.readFileSync(path.join(__dirname, 'fixtures', 'search-matrix.html'), 'utf8');
+    const pager = source.slice(source.indexOf('<div class="nav">'), source.indexOf('<div class="spacer_4">'))
+        .replace(/tracker\.php\?search_id=[^&"]*&amp;start=/g, 'viewforum.php?f=7&amp;start=');
+    const lastPager = pager.replace(/&nbsp;&nbsp;<a class="pg" href="[^"]*">След\.<\/a>/, '');
+    return function (req) {
+        const res = base(req);
+        if (new URL(req.url).pathname !== '/forum/viewforum.php') return res;
+        const last = new URL(req.url).searchParams.get('start') === '50';
+        res.body = res.body.replace(/<div class="bottom_info pad_2">[\s\S]*?<!--\/bottom_info-->/, function () {
+            return '<div class="bottom_info pad_2">' + (last ? lastPager : pager) + '</div><!--/bottom_info-->';
+        });
+        return res;
+    };
+}
+
+test('a forum page after the first lists its topics, not the subforums again', function () {
+    const h = load({ server: forumPagerServer() });
+    const page = h.open('rutracker:forum:7:0:' + encodeURIComponent('Зарубежное кино'));
+    const subforums = function () {
+        return urls(page).filter(function (u) { return /^rutracker:forum:\d+:0:/.test(u); }).length;
+    };
+    const topics = function () {
+        return urls(page).filter(function (u) { return /^rutracker:topic:\d+:/.test(u); }).length;
+    };
+    const subforumsFirst = subforums();
+    const topicsFirst = topics();
+    assert.ok(subforumsFirst > 5, 'subforums on page 1: ' + subforumsFirst);
+    assert.strictEqual(page.more, true, 'page 1 has a next page');
+    h.more(page);
+    assert.strictEqual(subforums(), subforumsFirst, 'subforum list appended again');
+    assert.ok(topics() > topicsFirst, 'page 2 added its topics');
+    assert.strictEqual(page.more, false, 'start=50 is the last page');
+});
+
 test(':search parses result rows with size, seeders and leechers', function () {
     const h = load();
     const page = h.open('rutracker:search:0:matrix');
@@ -179,6 +219,28 @@ test(':topic shows the release poster; Movian decodes webp itself', function () 
     const release = h.open('rutracker:topic:6924363:x').items.filter(function (i) { return i.meta.duration === 'T'; })[0];
     assert.strictEqual(release.meta.icon, 'https://i129.fastpic.org/big/2026/1018/7b/a45a55e1de381f723033e431ffcc7d7b.png');
     assert.strictEqual(h.item('rutracker', 'webp'), undefined, 'setting removed');
+});
+
+test('the search shortcuts of a topic take their query from the title', function () {
+    /* The old greedy /\[(.*)/ cut everything from the first "[": the
+     * title "[Матрица] Осознанность (1999) [1080p]" gave an empty query. */
+    [
+        ['[Матрица] Осознанность (1999) [1080p]', 'Осознанность'],
+        ['[VA] Сборник хитов (2020) FLAC', 'Сборник хитов'],
+        ['Знакомьтесь, Джо Блэк / Meet Joe Black (1998) [1080p]', 'Знакомьтесь, Джо Блэк'],
+    ].forEach(function (c) {
+        const h = load();
+        const page = h.open('rutracker:topic:6924363:' + encodeURIComponent(c[0]));
+        assert.deepStrictEqual(urls(page).filter(function (u) { return /^rutracker:search:0:/.test(u); }),
+            ['rutracker:search:0:' + c[1]], c[0]);
+    });
+});
+
+test('a topic title that the query rule empties gets no search shortcuts', function () {
+    const h = load();
+    const page = h.open('rutracker:topic:6924363:' + encodeURIComponent('[Live] [2020]'));
+    assert.strictEqual(titles(page).indexOf('Поиск:'), -1, titles(page).join('|'));
+    assert.deepStrictEqual(urls(page).filter(function (u) { return /search/.test(u); }), []);
 });
 
 test(':torrent downloads the file and hands it to the torrent browser', function () {
@@ -234,6 +296,19 @@ test('a search the site did not answer is an error, not "nothing found"', functi
     });
 });
 
+test('a later search page the site did not answer is said so, and paging stops', function () {
+    ['down', 'challenge'].forEach(function (pagerFailure) {
+        const h = load({ serverOptions: { pagerFailure: pagerFailure } });
+        const page = h.open('rutracker:search:0:matrix');
+        assert.strictEqual(page.more, true, pagerFailure);
+        assert.strictEqual(page.items.filter(function (i) { return /:topic:/.test(i.url); }).length, 8, pagerFailure);
+        h.more(page);
+        assert.strictEqual(titles(page).slice(-1)[0], 'Следующая страница не загружена: сайт не вернул страницу', pagerFailure);
+        assert.strictEqual(page.more, false, pagerFailure);
+        assert.strictEqual(page.errors.length, 0, pagerFailure);
+    });
+});
+
 test('search rows show the size as text, not as a download link', function () {
     const h = load();
     const page = h.open('rutracker:search:0:matrix');
@@ -249,6 +324,27 @@ test('topic pages do not pile up HTTP inspectors', function () {
     h.open('rutracker:topic:6924363:x');
     h.open('rutracker:topic:6924363:x');
     assert.strictEqual(h.inspectors.length, before);
+});
+
+test('bookmarks say so when the site sent no bookmarks page', function () {
+    [{ down: true }, { cloudflare: true }].forEach(function (serverOptions) {
+        const h = load({ serverOptions: serverOptions });
+        h.jar['rutracker.org'] = { bb_session: fake.VALID };
+        const page = h.open('rutracker:bookmarks');
+        assert.strictEqual(page.errors.length, 1, JSON.stringify(serverOptions));
+        assert.ok(/Закладки не загружены/.test(page.errors[0]), page.errors[0]);
+        assert.strictEqual(page.items.length, 0);
+        assert.strictEqual(page.more, false);
+    });
+});
+
+test('a bookmarks page without topics says that there are none', function () {
+    const h = load();
+    h.jar['rutracker.org'] = { bb_session: fake.VALID };
+    const page = h.open('rutracker:bookmarks');
+    assert.deepStrictEqual(titles(page), ['Закладок нет']);
+    assert.strictEqual(page.errors.length, 0);
+    assert.strictEqual(page.more, false);
 });
 
 test('a torrent download that returns a web page is an error, not a torrent', function () {
@@ -385,6 +481,15 @@ test('the captcha entry page shows the captcha image and asks for the code', fun
     assert.strictEqual(page.items[0].meta.icon, 'http://static.t-ru.org/captcha/abc.jpg');
     const next = JSON.parse(decodeURIComponent(page.redirects[0].replace('rutracker:login:', '')));
     assert.deepStrictEqual(next, { showAuth: true, captchaSid: 'SID123', captchaValue: 'ab12', capCodeName: 'cap_code_xyz' });
+});
+
+test('the captcha image is fetched over https, the scheme the site uses', function () {
+    /* The site's <img src> is https://static.t-ru.org/…; the page gets the
+     * part after "//" and must not fall back to plain http. */
+    const h = load({ serverOptions: { captcha: true }, popup: { credentials: [{ username: 'user', password: 'x' }] } });
+    const login = h.open('rutracker:login:' + encodeURIComponent(JSON.stringify({ showAuth: false })));
+    const captcha = h.open(login.redirects[0]);
+    assert.strictEqual(captcha.items[0].meta.icon, 'https://static.t-ru.org/captcha/abc.jpg');
 });
 
 test('a login answered with the captcha code sends it with the form', function () {
