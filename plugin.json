@@ -1,14 +1,16 @@
 {
-  "description": "Rutracker.org is currently the biggest bitTorrent tracker in Russia and CIS.",
-  "author": "Wain @ Fix & Ext Denizzz_zp # 13.01.2020",
-  "homepage": "https://github.com/denizzzzp/movian-rutracker",
-  "title": "Rutracker",
-  "synopsis": "Rutracker",
-  "version": "0.7.5",
-  "file": "rutracker.js",
-  "showtimeVersion": "4.9.389",
   "type": "ecmascript",
-  "icon": "logo.png",
+  "apiversion": 2,
   "id": "rutracker",
-  "category": "video"
+  "file": "main.js",
+  "showtimeVersion": "5",
+  "version": "0.9.0",
+  "author": "Wain (fix by kovalDN)",
+  "title": "RuTracker.org",
+  "icon": "logo.png",
+  "synopsis": "Онлайн торрент трекер RuTracker.org для просмотра фильмов, мультфильмов, сериалов и прочего контента",
+  "category": "video",
+  "description": "<p>Плагин для Movian для доступа к онлайн торрент трекеру RuTracker.org через домены/зеркала сайтов, <a href=\"http://rutracker.org\">http://rutracker.org</a></p>",
+  "homepage": "https://bit.ly/mprepo",
+  "downloadURL": "https://bit.ly/MP-RuTracker-org"
 }

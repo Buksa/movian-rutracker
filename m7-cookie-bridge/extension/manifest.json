@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "Movian Cookie Bridge",
+  "description": "Copies browser cookies/User-Agent into Movian (HDRezka and RuTracker profiles) and captures recent request headers.",
+  "version": "0.4.0",
+  "permissions": [
+    "cookies",
+    "storage",
+    "webRequest"
+  ],
+  "host_permissions": [
+    "https://hdrezka.me/*",
+    "https://*.hdrezka.me/*",
+    "http://hdrezka.me/*",
+    "http://*.hdrezka.me/*",
+    "https://rutracker.org/*",
+    "https://*.rutracker.org/*",
+    "http://rutracker.org/*",
+    "http://*.rutracker.org/*",
+    "https://rutracker.net/*",
+    "https://*.rutracker.net/*",
+    "http://rutracker.net/*",
+    "http://*.rutracker.net/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Movian Cookie Bridge",
+    "default_popup": "popup.html"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'; connect-src 'self' http://*:* ws://*:*;"
+  }
+}
