@@ -36,6 +36,8 @@ fi
 
 ZIP=${1:-$("$ROOT/m7-cookie-bridge/tools/package.sh" | head -1)}
 mkdir -p "$LIVE_DIR/persistent/mrp/installed" "$LIVE_DIR/cache"
+# stop.sh stops and wipes only a directory that carries this marker.
+: > "$LIVE_DIR/.rutracker-live"
 # swinst expects <id>@<origin>.zip and crashes on a name without "@".
 cp "$ZIP" "$LIVE_DIR/persistent/mrp/installed/rutracker@local.zip"
 

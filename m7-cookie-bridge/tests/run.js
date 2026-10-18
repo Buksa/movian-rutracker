@@ -508,6 +508,32 @@ test('live STPP reader takes the child-vector frame Movian sends unclosed', func
     assert.strictEqual(parseFrame('not json'), null);
 });
 
+test('live stop.sh stops and wipes only a directory start.sh set up', function () {
+    /* A LIVE_DIR typo, or another Movian's profile (persistent/ + cache/,
+     * as /tmp/mdev/dev has), must survive: only start.sh's marker makes a
+     * directory ours. No processes are involved: there are no pid files. */
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'live-stop-'));
+    const stop = function () {
+        return spawnSync('sh', [path.join(ROOT, 'tools', 'live', 'stop.sh')],
+            { encoding: 'utf8', env: Object.assign({}, process.env, { LIVE_DIR: dir }) });
+    };
+    try {
+        fs.mkdirSync(path.join(dir, 'persistent', 'plugins'), { recursive: true });
+        fs.mkdirSync(path.join(dir, 'cache'));
+        fs.writeFileSync(path.join(dir, 'persistent', 'plugins', 'keep'), 'x');
+        let res = stop();
+        assert.notStrictEqual(res.status, 0, 'a directory without the marker is refused');
+        assert.ok(fs.existsSync(path.join(dir, 'persistent', 'plugins', 'keep')), 'foreign profile wiped');
+
+        fs.writeFileSync(path.join(dir, '.rutracker-live'), '');
+        res = stop();
+        assert.strictEqual(res.status, 0, res.stderr);
+        assert.ok(!fs.existsSync(path.join(dir, 'persistent')), 'own profile kept');
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
 /* ------------------------------------------------------------------ */
 console.log('');
 console.log('passed: ' + passed + ', failed: ' + failures.length);
