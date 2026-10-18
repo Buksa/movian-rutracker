@@ -98,6 +98,12 @@ exports.topicRows = function (text, layout) {
   return out;
 };
 
+//  Is this a tracker.php result page? An empty result still has the results
+//  table (with a "Не найдено" row); a challenge or error page has none.
+exports.searchResults = function (text) {
+  return /id="tor-tbl"/.test(String(text || ''));
+};
+
 //  The "След." (next) pager link inside the element with `containerClass`,
 //  as a path relative to /forum/, or null on the last page.
 exports.nextPage = function (dom, containerClass) {

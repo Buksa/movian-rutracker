@@ -194,6 +194,10 @@ exports.register = function (ctx) {
       p.loading = true;
       var result = catalog.search(url);
       p.loading = false;
+      if (!topicCount && !result.topics.length) {
+        nothingFound(result.loaded);
+        return p.haveMore(false);
+      }
       if (result.topics.length) {
         p.appendItem('', 'separator', {title: new RichText('Темы ' + colorStr(pageNum + 1, gray))});
       }
@@ -205,6 +209,17 @@ exports.register = function (ctx) {
       url = result.next;
       pageNum++;
       return p.haveMore(true);
+    }
+    //  The site matches whole words: "dis" finds nothing, "dis*" finds
+    //  "Discovery". Offer that instead of an empty page.
+    function nothingFound(loaded) {
+      if (!loaded) return p.error('Поиск не выполнен: сайт не вернул результаты (сеть или проверка Cloudflare)');
+      p.appendItem('', 'separator', {title: 'Ничего не найдено'});
+      if (/[^\s*]$/.test(query))
+        p.appendItem(PREFIX + ':search:' + forumId + ':' + query + '*', 'directory', {
+          title: 'Искать начало слова: ' + query + '*',
+          icon: icon.arrow,
+        });
     }
   });
 

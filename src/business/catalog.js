@@ -38,9 +38,10 @@ exports.create = function (client, parser) {
       return {topics: forumTopics(text), next: next(text, 'bottom_info')};
     },
 
+    //  loaded: false when the site sent no result page (network, Cloudflare).
     search: function (url) {
       var text = client.page(url);
-      return {topics: parser.topicRows(text, 'tracker'), next: next(text, 'bottom_info')};
+      return {loaded: parser.searchResults(text), topics: parser.topicRows(text, 'tracker'), next: next(text, 'bottom_info')};
     },
 
     //  A topic page. On the first page the opening post is the release

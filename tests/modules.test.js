@@ -74,6 +74,12 @@ test('nextPage finds the "След." pager link or reports the last page', funct
     assert.strictEqual(parser.nextPage(parser.parse(''), 'bottom_info'), null);
 });
 
+test('searchResults tells a result page from a challenge or nothing', function () {
+    assert.strictEqual(parser.searchResults(fixture('search-matrix.html')), true);
+    assert.strictEqual(parser.searchResults(fixture('cf-challenge.html')), false);
+    assert.strictEqual(parser.searchResults(''), false);
+});
+
 test('topicPage returns the release links, counts and comments', function () {
     const t = parser.topicPage(fixture('topic-6924363.html'), true);
     assert.strictEqual(t.post.torrent, 'dl.php?t=6924363');

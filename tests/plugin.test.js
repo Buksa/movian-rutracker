@@ -208,6 +208,32 @@ test('a search query with a colon keeps its colon and the forum', function () {
     assert.ok(url.indexOf('nm=' + encodeURIComponent('Star Trek: Discovery') + '&f=-1&') !== -1, url);
 });
 
+test('an empty search says so and offers the word-start search', function () {
+    /* The site matches whole words: "dis" finds nothing, "dis*" does. */
+    const h = load();
+    const page = h.open('rutracker:search:0:matr');
+    assert.deepStrictEqual(titles(page), ['Ничего не найдено', 'Искать начало слова: matr*']);
+    assert.strictEqual(page.items[1].url, 'rutracker:search:-1:matr*');
+    assert.strictEqual(page.more, false);
+    assert.strictEqual(page.errors.length, 0);
+    const retry = h.open(page.items[1].url);
+    assert.strictEqual(retry.items.filter(function (i) { return /:topic:/.test(i.url); }).length, 8);
+});
+
+test('an empty word-start search offers no further retry', function () {
+    const h = load();
+    assert.deepStrictEqual(titles(h.open('rutracker:search:0:zzz*')), ['Ничего не найдено']);
+});
+
+test('a search the site did not answer is an error, not "nothing found"', function () {
+    [{ cloudflare: true }, { down: true }].forEach(function (serverOptions) {
+        const page = load({ serverOptions: serverOptions }).open('rutracker:search:0:matrix');
+        assert.strictEqual(page.errors.length, 1, JSON.stringify(serverOptions));
+        assert.ok(/Поиск не выполнен/.test(page.errors[0]), page.errors[0]);
+        assert.strictEqual(page.items.length, 0);
+    });
+});
+
 test('search rows show the size as text, not as a download link', function () {
     const h = load();
     const page = h.open('rutracker:search:0:matrix');

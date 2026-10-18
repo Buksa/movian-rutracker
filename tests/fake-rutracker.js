@@ -37,6 +37,16 @@ function html(name, guest) {
     return { status: 200, headers: { 'Content-Type': 'text/html; charset=windows-1251' }, body: body };
 }
 
+/* The live site's empty result: the results table stays, with a single
+ * "Не найдено" row, and there is no pager. */
+function emptySearch(page) {
+    page.body = page.body
+        .replace(/<tbody>[\s\S]*?<\/tbody>/, '<tbody><tr><td colspan="10" class="row1 tCenter pad_12">Не найдено</td></tr></tbody>')
+        .replace(/Результатов поиска: \d+/, 'Результатов поиска: 0')
+        .replace(/<div class="bottom_info">[\s\S]*?<!--\/bottom_info-->/, '<div class="bottom_info"></div><!--/bottom_info-->');
+    return page;
+}
+
 /*
  * options:
  *   cloudflare: true  -> requests without the bridge cf_clearance + browser UA
@@ -67,8 +77,16 @@ function server(options) {
             return html(authed ? 'index.html' : 'index-guest.html');
         case '/forum/viewforum.php':
             return html('forum-7.html', !authed);
-        case '/forum/tracker.php':
-            return html('search-matrix.html', !authed);
+        case '/forum/tracker.php': {
+            /* Like the site: whole words, or a word start with "*". This one
+             * only knows "matrix"; pager links (search_id) carry no query. */
+            const nm = u.searchParams.get('nm');
+            const known = nm === null || nm.toLowerCase().split(/[^a-z*]+/).some(function (w) {
+                return w === 'matrix' || (w.length > 1 && w.slice(-1) === '*' && 'matrix'.indexOf(w.slice(0, -1)) === 0);
+            });
+            const page = html('search-matrix.html', !authed);
+            return known ? page : emptySearch(page);
+        }
         case '/forum/viewtopic.php':
             return html('topic-6924363.html', !authed);
         case '/forum/bookmarks.php':
