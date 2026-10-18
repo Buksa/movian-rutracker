@@ -472,6 +472,42 @@ test('orca tool source never prints the assembled cookie header', function () {
     });
 });
 
+test('live leak scan reports names only and tells the store from a leak', function () {
+    const fake = makeFakeOrcaDb();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'leakscan-'));
+    try {
+        const scan = function () {
+            return spawnSync(process.execPath, [path.join(ROOT, 'tools', 'live', 'leakscan.js'), '--db', fake.dbPath, dir],
+                { encoding: 'utf8' });
+        };
+        fs.mkdirSync(path.join(dir, 'plugins', 'rutracker@local', 'store'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'plugins', 'rutracker@local', 'store', 'rutracker_bridge'), '{"c":"bb_session=' + SECRET + '"}');
+        fs.writeFileSync(path.join(dir, 'movian-0.log'), 'nothing here');
+        let res = scan();
+        assert.strictEqual(res.status, 0, res.stdout + res.stderr);
+        assert.ok(/store .*rutracker_bridge: bb_session/.test(res.stdout), res.stdout);
+
+        fs.writeFileSync(path.join(dir, 'movian-0.log'), 'Cookie: cf_clearance=' + SECRET2);
+        res = scan();
+        assert.strictEqual(res.status, 1, 'a value in the log is a leak');
+        assert.ok(/LEAK  movian-0\.log: cf_clearance/.test(res.stdout), res.stdout);
+        const out = res.stdout + res.stderr;
+        assert.strictEqual(out.indexOf(SECRET), -1, 'value printed');
+        assert.strictEqual(out.indexOf(SECRET2), -1, 'value printed');
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+        fs.rmSync(fake.dir, { recursive: true, force: true });
+    }
+});
+
+test('live STPP reader takes the child-vector frame Movian sends unclosed', function () {
+    /* Buksa/movian#295: "[5,100,0,[1]" lacks its final bracket. */
+    const parseFrame = require(path.join(ROOT, 'tools', 'live', 'stpp.js')).parseFrame;
+    assert.deepStrictEqual(parseFrame('[5,100,0,[1]'), [5, 100, 0, [1]]);
+    assert.deepStrictEqual(parseFrame('[4,101,"title"]'), [4, 101, 'title']);
+    assert.strictEqual(parseFrame('not json'), null);
+});
+
 /* ------------------------------------------------------------------ */
 console.log('');
 console.log('passed: ' + passed + ', failed: ' + failures.length);

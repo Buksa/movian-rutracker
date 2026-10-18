@@ -15,6 +15,7 @@ Movian M7, чтобы плагин работал за Cloudflare без WebView
 | `extension/` | Расширение Chrome/Brave 0.4.0 (MV3); `lib/bridge-core.js` — каноническое ядро Bridge |
 | `tools/orca-session-push.js` | Перенос сессии из встроенного браузера Orca |
 | `tools/package.sh` | Сборка `dist/` (ZIP плагина и расширения; `dist/` в `.gitignore`) |
+| `../tools/live/` | Живая проверка в Movian M7: запуск своего экземпляра, маршруты и страница по STPP, поиск утечек, остановка |
 | `tests/run.js` | Тесты ядра, расширения и Orca-тулзы (`node tests/run.js` в корне запускает всё) |
 
 Сессионные cookies — учётные данные: значения не логируются и не

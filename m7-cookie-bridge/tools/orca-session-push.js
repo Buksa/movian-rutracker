@@ -319,4 +319,9 @@ function main() {
     });
 }
 
-main();
+if (require.main === module) {
+    main();
+}
+
+/* For tools/live/leakscan.js: the same cookie lookup, values kept in memory. */
+module.exports = { collectCookies: collectCookies };
