@@ -31,7 +31,11 @@ exports.register = function (plugin, logo) {
   var group = new settings.globalSettings(plugin.id, plugin.title, logo, plugin.synopsis);
   group.createInfo('info', logo, 'Plugin developed by ' + plugin.author + ', \n' + plugin.id + ', \n' + 'ver. ' + plugin.version + ' \n');
   group.createDivider('Настройки:');
-  group.createBool('tosaccepted', 'Принятие условий использования (при открытии плагина)', false, function (v) {config.tosaccepted = v});
+  var terms = group.createBool('tosaccepted', 'Принятие условий использования (при открытии плагина)', false, function (v) {config.tosaccepted = v});
+  //  Saved through the settings item, so the answer survives a restart.
+  config.acceptTerms = function () {
+    terms.value = true;
+  };
   group.createBool('debug', 'Отладка (debug)', false, function (v) {config.debug = v});
   group.createString('domain0', 'Домен (базовый URL без завершающего "/" в конце)', 'https://rutracker.org', function (v) {config.domain0 = v});
   //  Read once at start-up: a new domain applies after the plugin reloads.

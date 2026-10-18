@@ -46,7 +46,7 @@ section('plugin: loading and registration');
 test('plugin loads and registers its routes, searcher and service', function () {
     const h = load();
     const patterns = h.routes.map(function (r) { return r.pattern; });
-    ['start', 'search:(.*):(.*)', 'bookmarks', 'forum:(.*):(.*):(.*)', 'topic:(.*):(.*)',
+    ['start', 'search:([^:]*):(.*)', 'bookmarks', 'forum:(.*):(.*):(.*)', 'topic:(.*):(.*)',
         'torrent:(.*)', 'login:(.*)', 'logout:(.*):(.*):(.*)', 'captchalogin:(.*):(.*):(.*)',
         'captcha:(.*):(.*):(.*)'].forEach(function (p) {
         assert.ok(patterns.indexOf('rutracker:' + p) !== -1, 'missing route ' + p);
@@ -200,6 +200,14 @@ test(':start shows the account on every visit, not every other one', function ()
     });
 });
 
+test('a search query with a colon keeps its colon and the forum', function () {
+    /* Codex review: the greedy route split "0:Star Trek" / " Discovery". */
+    const h = load();
+    h.open('rutracker:search:0:Star Trek: Discovery');
+    const url = h.requests[h.requests.length - 1].url;
+    assert.ok(url.indexOf('nm=' + encodeURIComponent('Star Trek: Discovery') + '&f=-1&') !== -1, url);
+});
+
 test('search rows show the size as text, not as a download link', function () {
     const h = load();
     const page = h.open('rutracker:search:0:matrix');
@@ -232,7 +240,62 @@ test('a torrent download that fails on the network is an error', function () {
 });
 
 /* ------------------------------------------------------------------ */
+function bridgeCookiesOnUrl(h, url) {
+    h.context.require('movian/http').request(url, { noFail: true });
+    return h.requests[h.requests.length - 1].cookies.bb_session === fake.VALID;
+}
+
 section('plugin: legacy login');
+
+/* Codex review (public PR): success needs positive evidence. */
+test('a login that gets no answer is an error, not a success', function () {
+    const h = load({ serverOptions: { down: true }, popup: { credentials: [{ username: 'user', password: 'secret-password' }] } });
+    pushSession(h, 'bb_session=browser; bb_guid=g1');
+    const page = h.open('rutracker:login:' + encodeURIComponent(JSON.stringify({ showAuth: false })));
+    assert.deepStrictEqual(page.redirects, []);
+    assert.strictEqual(page.errors.length, 1, 'error shown');
+    assert.ok(h.logs.some(function (l) { return /status=/.test(l); }) && h.item('rutracker_bridge', 'browserCookie').value !== '',
+        'the bridge session is not cleared');
+});
+
+test('a login answered by a Cloudflare challenge is reported as such', function () {
+    const h = load({ serverOptions: { cloudflare: true }, popup: { credentials: [{ username: 'user', password: 'secret-password' }] } });
+    const page = h.open('rutracker:login:' + encodeURIComponent(JSON.stringify({ showAuth: false })));
+    assert.deepStrictEqual(page.redirects, []);
+    assert.ok(/Cloudflare/.test(page.errors[0] || ''), page.errors.join());
+});
+
+test('a login answered by an unrecognised page asks again instead of claiming success', function () {
+    const srv = fake.server({ loginPage: 'unrecognized' });
+    const h = load({ server: srv, popup: { credentials: [{ username: 'user', password: 'secret-password' }] } });
+    const page = h.open('rutracker:login:' + encodeURIComponent(JSON.stringify({ showAuth: false })));
+    assert.strictEqual(srv.state.logins.length, 1);
+    assert.deepStrictEqual(page.redirects, [], 'no redirect to :start after the second prompt is cancelled');
+});
+
+test('logout returns to :start when start-up login is off', function () {
+    const h = load();
+    const page = h.open('rutracker:logout:true:null:null');
+    assert.deepStrictEqual(page.redirects, ['rutracker:start']);
+});
+
+test('logout of a bridged account clears the bridge without logging the browser out', function () {
+    const h = load();
+    pushSession(h);
+    h.open('rutracker:logout:true:null:null');
+    const post = h.requests.filter(function (r) { return r.postdata && r.postdata.logout; })[0];
+    assert.ok(post, 'logout posted');
+    assert.notStrictEqual(post.cookies.bb_session, fake.VALID, 'the browser session cookie was not used for logout');
+    assert.strictEqual(bridgeCookiesOnUrl(h, 'https://rutracker.org/forum/index.php'), false, 'bridge cleared');
+});
+
+test('accepting the terms is remembered across restarts', function () {
+    const h = load({ popup: { message: true } });
+    h.open('rutracker:start');
+    assert.strictEqual(h.settingsStore.rutracker.tosaccepted, true);
+    const again = load({ settings: h.settingsStore, stores: h.stores, popup: { message: false } });
+    assert.deepStrictEqual(again.open('rutracker:start').errors, [], 'not asked again');
+});
 
 test('legacy login posts the credentials and returns to :start', function () {
     const srv = fake.server();
@@ -357,6 +420,10 @@ test('bridge cookies go to the official RuTracker hosts over https', function ()
     const net = load({ settings: { rutracker: { domain: 'https://rutracker.net' } } });
     pushSession(net);
     assert.ok(bridgeCookiesOn(net, 'https://rutracker.net/forum/index.php'), 'rutracker.net as base');
+    /* Codex review: both official domains, whatever the base. */
+    assert.ok(bridgeCookiesOn(h, 'https://rutracker.net/forum/index.php'), 'rutracker.net with the .org base');
+    assert.strictEqual(h.requests[h.requests.length - 1].headers['user-agent'], fake.BROWSER_UA);
+    assert.ok(bridgeCookiesOn(net, 'https://rutracker.org/forum/index.php'), 'rutracker.org with the .net base');
 });
 
 test('bridge cookies never travel over plain http', function () {
@@ -512,8 +579,8 @@ test('before the check runs the status says received, not authenticated', functi
 /* ------------------------------------------------------------------ */
 section('security: secrets never reach movian.log');
 
-/* Visits every route once with a bridge session; the legacy login comes
- * last because a successful login replaces the bridge session. */
+/* Visits every route once with a bridge session; logout and the legacy
+ * login come last because both drop the bridge session. */
 function exerciseAll(h) {
     pushSession(h);
     h.open('rutracker:start');
@@ -523,9 +590,9 @@ function exerciseAll(h) {
     h.open('rutracker:bookmarks');
     h.open('rutracker:topic:6924363:x');
     h.open('rutracker:torrent:' + encodeURIComponent('https://rutracker.org/forum/dl.php?t=6924363'));
-    h.open('rutracker:logout:false:null:null');
     h.item('rutracker_bridge', 'bridgeCheck').action();
     h.flush();
+    h.open('rutracker:logout:false:null:null');
     h.open('rutracker:login:' + encodeURIComponent(JSON.stringify({ showAuth: false })));
 }
 
@@ -548,7 +615,9 @@ test('every RuTracker request carries the bridge User-Agent', function () {
      * silently defeat the bridge (seen live in 0.8.0 development). */
     const h = load({ popup: { credentials: [{ username: 'user', password: 'secret-password' }] } });
     exerciseAll(h);
-    h.requests.filter(function (r) { return /^https:\/\/rutracker\.org\//.test(r.url); }).forEach(function (r) {
+    const whileBridged = h.requests.slice(0, h.requests.findIndex(function (r) { return r.postdata && r.postdata.logout; }));
+    assert.ok(whileBridged.length > 8, 'requests made while the bridge was active: ' + whileBridged.length);
+    whileBridged.filter(function (r) { return /^https:\/\/rutracker\.org\//.test(r.url); }).forEach(function (r) {
         assert.strictEqual(r.headers['user-agent'], fake.BROWSER_UA, r.method + ' ' + r.url);
     });
 });

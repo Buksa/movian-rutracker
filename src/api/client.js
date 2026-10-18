@@ -87,7 +87,8 @@ exports.create = function (baseUrl) {
       return res ? decode(res) : '';
     },
 
-    //  Legacy login form. Returns the decoded answer, or '' on failure.
+    //  Legacy login form: {status, text, challenge}, or null when the network
+    //  failed.
     login: function (fields) {
       var res = request(forum + 'login.php', {
         noFail: true,
@@ -100,7 +101,9 @@ exports.create = function (baseUrl) {
           'Referer': forum + 'login.php',
         }),
       });
-      return res ? decode(res) : '';
+      if (!res) return null;
+      var lc = res.headers_lc || {};
+      return {status: res.statuscode, text: decode(res), challenge: lc['cf-mitigated'] === 'challenge'};
     },
 
     logout: function () {
@@ -134,8 +137,10 @@ exports.create = function (baseUrl) {
      * Registers the inspectors for RuTracker requests, including those Movian
      * makes itself (direct torrent links). Only the longest matching
      * inspector pattern runs for a request (es_http_inspect()), so all
-     * per-request work goes through these two. `session` supplies the
-     * bridged browser session: applyToRequest(ctrl), userAgent().
+     * per-request work goes through these: the chosen mirror, and both
+     * official domains whatever the mirror (links and redirects may cross
+     * between them). `session` supplies the bridged browser session:
+     * applyToRequest(ctrl), userAgent().
      */
     inspect: function (session) {
       io.httpInspectorCreate(baseUrl + '.*', function (ctrl) {
@@ -143,12 +148,14 @@ exports.create = function (baseUrl) {
         ctrl.setHeader('User-Agent', session.userAgent() || DEFAULT_UA);
         session.applyToRequest(ctrl);
       });
-      io.httpInspectorCreate('http.*rutracker.org.*', function (ctrl) {
-        ctrl.setHeader('User-Agent', session.userAgent() || DEFAULT_UA);
-        session.applyToRequest(ctrl);
-        ctrl.setHeader('Referer', 'http://rutracker.org/');
-        ctrl.setHeader('Accept-Language', 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7');
-        return 0;
+      ['rutracker.org', 'rutracker.net'].forEach(function (domain) {
+        io.httpInspectorCreate('http.*' + domain + '.*', function (ctrl) {
+          ctrl.setHeader('User-Agent', session.userAgent() || DEFAULT_UA);
+          session.applyToRequest(ctrl);
+          ctrl.setHeader('Referer', 'http://' + domain + '/');
+          ctrl.setHeader('Accept-Language', 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7');
+          return 0;
+        });
       });
     },
   };

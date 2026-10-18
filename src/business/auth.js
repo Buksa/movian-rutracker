@@ -7,7 +7,8 @@
 exports.create = function (client, parser) {
   return {
     //  captcha: {sid, field, value} when answering a captcha.
-    //  Returns {status: 'ok' | 'failed' | 'captcha', captcha: {image, sid, field}}.
+    //  Returns {status, captcha}: 'ok' | 'failed' | 'captcha' (with
+    //  {image, sid, field}) | 'network' | 'challenge'.
     login: function (username, password, captcha) {
       var fields = {
         'login_username': username,
@@ -19,10 +20,15 @@ exports.create = function (client, parser) {
         fields['cap_sid'] = captcha.sid;
         fields[captcha.field] = captcha.value;
       }
-      var text = client.login(fields);
-      var asked = parser.captcha(text);
+      var res = client.login(fields);
+      if (!res) return {status: 'network'};
+      if (res.challenge) return {status: 'challenge'};
+      var asked = parser.captcha(res.text);
       if (asked) return {status: 'captcha', captcha: asked};
-      return {status: parser.loginFailed(text) ? 'failed' : 'ok'};
+      //  A good login is answered with a redirect (the request does not
+      //  follow it); the form again, or any other page, is not a login.
+      var redirected = res.status >= 300 && res.status < 400;
+      return {status: redirected && !parser.loginFailed(res.text) ? 'ok' : 'failed'};
     },
 
     logout: function () {

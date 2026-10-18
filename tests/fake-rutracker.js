@@ -44,6 +44,8 @@ function html(name, guest) {
  *                        (index.php excepted, as on the live site)
  *   down: true        -> every request fails at the network level
  *   captcha: true     -> login answers with the captcha form
+ *   loginPage: 'unrecognized' -> login answers 200 with a page that has
+ *                        neither the error marker nor a redirect
  */
 function server(options) {
     options = options || {};
@@ -78,6 +80,7 @@ function server(options) {
             const p = req.postdata || {};
             if (p.logout) return { status: 302, headers: { Location: 'index.php' }, setCookies: [SESSION + '=deleted'] };
             state.logins.push({ username: p.login_username, hasPassword: !!p.login_password, cap: p.cap_sid });
+            if (options.loginPage === 'unrecognized') return html('index-guest.html', true);
             if (options.captcha && !p.cap_sid) {
                 return { status: 200, headers: { 'Content-Type': 'text/html; charset=windows-1251' },
                     body: '<h4 class="warnColor1 tCenter mrg_16">Вы ввели неверный пароль</h4>' +

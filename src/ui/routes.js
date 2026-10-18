@@ -94,7 +94,7 @@ exports.register = function (ctx) {
   new page.Route(PREFIX + ':start', function (p) {
     if (!config.tosaccepted) {
       if (popup.message(TOS, true, true)) {
-        config.tosaccepted = 1;
+        config.acceptTerms();
       }
       else {
         p.error('Условия не приняты. Плагин отключен.');
@@ -176,7 +176,8 @@ exports.register = function (ctx) {
     });
   }
 
-  new page.Route(PREFIX + ':search:(.*):(.*)', function (p, forumId, query) {
+  //  The forum id has no colon; the query may ("Star Trek: Discovery").
+  new page.Route(PREFIX + ':search:([^:]*):(.*)', function (p, forumId, query) {
     if (!forumId || (forumId === '0'))
       forumId = '-1';
     var url = client.url.search(query, forumId);
@@ -393,6 +394,11 @@ exports.register = function (ctx) {
         var result = ctx.auth.login(credentials.username, credentials.password, options.captchaSid ?
           {sid: options.captchaSid, field: options.capCodeName, value: options.captchaValue} : null);
         p.loading = false;
+        if (result.status === 'network' || result.status === 'challenge') {
+          p.error(result.status === 'network' ? 'Вход не выполнен: сетевая ошибка' :
+            'Вход не выполнен: сайт требует проверку Cloudflare. Войдите в браузере и передайте сессию через Cookie Bridge.');
+          return;
+        }
         if (result.status === 'captcha') {
           p.redirect(PREFIX + ':captcha:' + encodeURIComponent(result.captcha.image) + ':' + result.captcha.sid + ':' + result.captcha.field);
           return;
@@ -415,6 +421,10 @@ exports.register = function (ctx) {
 
   new page.Route(PREFIX + ':logout:(.*):(.*):(.*)', function (p, showAuth, redirectTopicId, redirectTopicTitle) {
     setup(p, 'Выход из ' + TTL);
+    //  A bridged session belongs to the user's browser: drop it here first,
+    //  so the logout request carries only the plugin's own session and the
+    //  browser stays logged in.
+    if (ctx.bridge.active()) ctx.bridge.clear();
     ctx.auth.logout();
     p.loading = false;
     if (config.startAuth)
@@ -423,6 +433,8 @@ exports.register = function (ctx) {
         topicId: redirectTopicId,
         topicTitle: redirectTopicTitle,
       });
+    else
+      p.redirect(PREFIX + ':start');
   });
 
   new page.Route(PREFIX + ':captchalogin:(.*):(.*):(.*)', function (p, image, capSid, capCodeName) {
