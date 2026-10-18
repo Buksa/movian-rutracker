@@ -202,6 +202,22 @@ test('global searcher returns results and a continue item', function () {
     assert.ok(titles(page).indexOf('Продолжить поиск') !== -1);
 });
 
+test('the global searcher says a search failed when the site sent no result page', function () {
+    /* Same rule as :search: no topics and no "continue" item, one separator
+     * that says the search failed, not that nothing was found. */
+    [{ down: true }, { cloudflare: true }].forEach(function (serverOptions) {
+        const page = load({ serverOptions: serverOptions }).search('matrix');
+        assert.deepStrictEqual(titles(page), ['Поиск не выполнен: сайт не вернул результаты (сеть или проверка Cloudflare)'],
+            JSON.stringify(serverOptions));
+        assert.deepStrictEqual(urls(page), [''], JSON.stringify(serverOptions));
+    });
+});
+
+test('the global searcher with zero topics from a good search keeps the continue item only', function () {
+    const page = load().search('zzzqqq');
+    assert.deepStrictEqual(titles(page), ['Продолжить поиск']);
+});
+
 test(':topic offers torrent and magnet items', function () {
     const h = load();
     const page = h.open('rutracker:topic:6924363:' + encodeURIComponent('Знакомьтесь, Джо Блэк'));

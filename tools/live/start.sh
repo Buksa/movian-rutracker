@@ -8,7 +8,8 @@
 #   tools/live/start.sh [plugin.zip]     (default: build one with package.sh)
 #
 #   MOVIAN_DIR   Movian M7 tree with build.debug/movian (required). Movian runs
-#                from there: its data root is the current directory.
+#                from there: its data root is the current directory. A
+#                relative one is made absolute here
 #   LIVE_DIR     state directory (default ${TMPDIR:-/tmp}/rutracker-live);
 #                a relative one is made absolute here
 #   MOVIAN_ARGS  extra Movian arguments
@@ -20,7 +21,10 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 . "$ROOT/tools/live/lib.sh"
 MOVIAN_DIR=${MOVIAN_DIR:?set MOVIAN_DIR to a Movian M7 tree with build.debug/movian}
 LIVE_DIR=${LIVE_DIR:-${TMPDIR:-/tmp}/rutracker-live}
-# Absolute before anything changes directory: Movian runs from MOVIAN_DIR.
+# Both absolute before anything changes directory: Movian runs from
+# MOVIAN_DIR, and BIN is formed from it.
+[ -d "$MOVIAN_DIR" ] || { echo "no Movian tree at $MOVIAN_DIR" >&2; exit 1; }
+MOVIAN_DIR=$(cd "$MOVIAN_DIR" && pwd)
 case "$LIVE_DIR" in /*) ;; *) LIVE_DIR=$(pwd)/$LIVE_DIR ;; esac
 BIN=$MOVIAN_DIR/build.debug/movian
 

@@ -162,6 +162,10 @@ exports.register = function (ctx) {
       p.loading = true;
       var result = catalog.search(client.url.search(query));
       p.loading = false;
+      if (!result.loaded) {
+        p.appendItem('', 'separator', {title: 'Поиск не выполнен: сайт не вернул результаты (сеть или проверка Cloudflare)'});
+        return;
+      }
       result.topics.forEach(function (row, i) {
         appendTopic(p, row, i + 1, 'Добавлен: ');
         p.entries++;
