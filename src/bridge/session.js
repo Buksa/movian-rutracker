@@ -91,6 +91,12 @@ exports.create = function (client, parser, clearance) {
     return !active && store.forgotten === true;
   }
 
+  //  A Password Login whose Candidate was declined left its cookies in the
+  //  Core Jar (`declined`, kept in the store): they are not sent either.
+  function hidesJar() {
+    return afterForget() || (!active && store.declined === true);
+  }
+
   //  `forgotten` is set only by a user's Forget: it hides the Core Jar's
   //  login until a new Session is Active (credentials.js). It is kept in the
   //  store, so it survives a restart. A Clear does not set it.
@@ -99,6 +105,7 @@ exports.create = function (client, parser, clearance) {
     //  store.js proxies have no delete trap: overwrite instead.
     store.session = session || '';
     store.forgotten = !session && !!forgotten;
+    if (session) store.declined = false;
   }
 
   //  The Clearance a request to `url` carries for `session` (null: the
@@ -228,6 +235,7 @@ exports.create = function (client, parser, clearance) {
         save({source: c.source, host: c.host.toLowerCase(), cookie: withoutClearance(c.cookie), ua: c.ua || '', user: res.user});
         status = 'authenticated';
       }
+      else if (c && c.source === 'password') store.declined = true;
       return res;
     },
 
@@ -273,11 +281,17 @@ exports.create = function (client, parser, clearance) {
 
     //  True after a Forget, until a new Session is Active: the Core Jar's
     //  RuTracker auth cookies are then not sent (credentials.js).
-    hidesJar: afterForget,
+    hidesJar: hidesJar,
 
     //  True after a Forget, until a new Session is Active: the next Password
     //  Login shows Movian's login dialog even with saved credentials (#22).
     forgotten: afterForget,
+
+    //  Moves on at every Forget and Clear: a Source that waits before
+    //  submit() (Password Login's POST) compares it to see it was cancelled.
+    generation: function () {
+      return generation;
+    },
 
     //  Clear (Cookie Bridge): every Candidate Check in flight is cancelled;
     //  the Active Session is left to the caller.

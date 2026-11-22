@@ -666,6 +666,21 @@ test('an unsuccessful automatic refresh retries once and does not loop', functio
         return r.url.indexOf('/forum/tracker.php?') !== -1;
     }).length, 2);
 });
+test('a challenge again after the automatic refresh is reported, not taken for a guest page (#43)', function () {
+    /* Codex on the mirror PR: the second challenge has no user and is a
+     * response, so a signed-in user was sent to Password Login. */
+    const h = load({
+        serverOptions: { cloudflare: true },
+        jar: { 'rutracker.org': { bb_session: fake.VALID } },
+        popup: { web: { result: 'userclose', cookies: { cf_clearance: 'stale-clearance' }, ua: fake.BROWSER_UA } }
+    });
+    const page = h.open(FORUM_URL);
+    assert.strictEqual(h.webpopups.length, 1, 'one refresh');
+    assert.deepStrictEqual(page.redirects, [], 'no Password Login');
+    const t = titles(page);
+    assert.ok(t.some(function (s) { return /Cloudflare/.test(s); }), brief(t));
+    assert.strictEqual(page.more, false, 'paging stops');
+});
 test('an expired Core Jar session after clearance resumes the same forum category through Password Login', function () {
     const title = 'Зарубежное кино';
     const route = 'rutracker:forum:7:0:' + encodeURIComponent(title);
@@ -1203,6 +1218,24 @@ test('every Set-Cookie of the login answer is kept, not only the last one', func
     const check = h.requests[h.requests.length - 1];
     assert.ok(/viewforum/.test(check.url) && check.opts.noAuth, check.url);
     assert.deepStrictEqual(check.cookies, { bb_session: fake.VALID, bb_guid: 'g9', bb_ssl: '1' });
+});
+
+test('a login whose Session Check failed does not reach later pages through the Core Jar (#42)', function () {
+    /* Codex on the mirror PR: the POST put bb_session in the Core Jar, the
+     * check answered 503, and :start then ran signed in as that login. */
+    const site = fake.server();
+    const h = load({
+        server: function (req) {
+            if (req.opts && req.opts.noAuth && /viewforum/.test(req.url)) return { status: 503, headers: {}, body: '' };
+            return site(req);
+        },
+        popup: { credentials: [USER] }
+    });
+    const page = h.open(LOGIN);
+    assert.ok(/не подтвержд/.test(page.errors[0] || ''), page.errors.join());
+    const t = titles(h.open('rutracker:start'));
+    assert.ok(!t.some(function (s) { return /TestUser/.test(s); }), brief(t));
+    assert.ok(!h.requests[h.requests.length - 1].cookies.bb_session, 'the jar login is not sent');
 });
 
 test('a login answer without bb_session is not committed and is reported', function () {
@@ -1867,6 +1900,16 @@ test('clearing right after a transfer cancels its pending hand-over', function (
     h.item('rutracker_bridge', 'bridgeClear').action();
     h.flush();
     assert.ok(!h.stores.rutracker_session || !h.stores.rutracker_session.session, 'the cleared session stays gone');
+});
+
+test('a UA half left alone does not block the same pair sent again (#44)', function () {
+    /* Codex on the mirror PR: the timed-out UA stayed in browserUA, so the
+     * same UA sent again was no change and no callback; every retry lacked it. */
+    const h = load();
+    h.stppSet(BRIDGE + 'browserUA.value', fake.BROWSER_UA);
+    h.tick(3001);
+    pushSession(h);
+    assert.ok(bridgeCookiesOn(h, 'https://rutracker.org/forum/index.php'), 'the retried pair is the session');
 });
 
 /* ------------------------------------------------------------------ */
@@ -2727,6 +2770,29 @@ test('Cookie Bridge: a Forget while its Candidate Check is in flight leaves no S
     assertNothingSaved(h, 'forget');
     assert.ok(h.notifications.some(function (n) { return /отмен/.test(n); }), 'a cancelled notice: ' + h.notifications.join(' | '));
     assert.ok(!h.notifications.some(function (n) { return /не прошла/.test(n); }), 'not reported as rejected');
+});
+
+test('Password Login: a Forget while its form POST is in flight cancels that login (#41)', function () {
+    /* Codex on the mirror PR: submit() took the generation only after the
+     * POST, so a Forget during the POST did not cancel its late answer. */
+    const site = fake.server();
+    let h;
+    let ran = false;
+    h = load({
+        server: function (req) {
+            if (!ran && /login\.php/.test(req.url) && req.method === 'POST') {
+                ran = true;
+                h.open('rutracker:forget');
+            }
+            return site(req);
+        },
+        popup: { credentials: [{ username: 'user', password: 'secret-password' }] }
+    });
+    const page = h.open('rutracker:login:' + encodeURIComponent(JSON.stringify({ showAuth: false })));
+    assert.ok(ran, 'the Forget ran during the POST');
+    assert.strictEqual(h.context.session.active(), false, 'no Active Session');
+    assert.strictEqual(h.context.session.forgotten(), true, 'the Forget still holds');
+    assert.deepStrictEqual(page.redirects, [], 'no return to :start');
 });
 
 test('Cookie Bridge: the "Clear" action while its Candidate Check is in flight leaves no Session and no Clearance', function () {

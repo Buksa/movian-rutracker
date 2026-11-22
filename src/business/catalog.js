@@ -40,6 +40,7 @@ exports.create = function (client, parser) {
         user: parser.loginName(text),
         clearanceRefreshed: got.refreshed,
         network: got.network,
+        challenge: got.challenge,
       };
     },
 
@@ -53,6 +54,7 @@ exports.create = function (client, parser) {
         user: parser.loginName(text),
         clearanceRefreshed: got.refreshed,
         network: got.network,
+        challenge: got.challenge,
       };
     },
 
@@ -66,6 +68,7 @@ exports.create = function (client, parser) {
         user: parser.loginName(text),
         clearanceRefreshed: got.refreshed,
         network: got.network,
+        challenge: got.challenge,
       };
     },
 
@@ -77,6 +80,7 @@ exports.create = function (client, parser) {
       p.user = parser.loginName(got.text);
       p.clearanceRefreshed = got.refreshed;
       p.network = got.network;
+      p.challenge = got.challenge;
       if (p.post.torrent) p.post.torrent = client.url.resolve(p.post.torrent);
       if (p.download) p.download = client.forum + p.download;
       if (p.dl) p.dl = client.forum + p.dl;

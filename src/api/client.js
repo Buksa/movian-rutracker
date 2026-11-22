@@ -197,17 +197,20 @@ exports.create = function (baseUrl, clearance) {
       }
       var refreshed = false;
       var result = fetchPage();
-      if (result && challenged(result.res, result.text)) {
+      var challenge = !!result && challenged(result.res, result.text);
+      if (challenge) {
         if (noRefresh || !refreshClearance) refused(url, result.carried);
         //  The callback makes the drop decision itself when it returns false.
         else if (refreshClearance(url, result.carried)) {
           refreshed = true;
           result = fetchPage();
-          if (result && challenged(result.res, result.text)) refused(url, result.carried);
+          challenge = !!result && challenged(result.res, result.text);
+          if (challenge) refused(url, result.carried);
         }
       }
-      //  network: no response at all (text is then '').
-      return {text: result ? result.text : '', refreshed: refreshed, network: !result};
+      //  network: no response at all (text is then ''); challenge: the
+      //  answer is still Cloudflare's challenge.
+      return {text: result ? result.text : '', refreshed: refreshed, network: !result, challenge: challenge};
     },
     setClearanceRefresh: function (fn) {
       refreshClearance = fn;

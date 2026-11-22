@@ -172,7 +172,7 @@ const LOGIN_FAILED = '<h4 class="warnColor1 tCenter mrg_16">Вы ввели не
 function loginWith(answer, check) {
     const submitted = [];
     const client = { host: 'rutracker.org', defaultUA: 'UA/1', login: function () { return answer; } };
-    const session = { submit: function (c) { submitted.push(c); return { status: check }; } };
+    const session = { generation: function () { return 0; }, submit: function (c) { submitted.push(c); return { status: check }; } };
     const auth = rt.require('./src/business/auth').create(client, parser, session);
     return { result: auth.login('user', 'secret', null), submitted: submitted };
 }

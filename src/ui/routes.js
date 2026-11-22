@@ -159,7 +159,12 @@ exports.register = function (ctx) {
       p.loading = true;
       var result = fetch(url, n + 1);
       p.loading = false;
-      //  No response is not a guest page: the warning shows, not Password Login.
+      //  No response, or the challenge again, is not a guest page: a
+      //  warning shows, not Password Login.
+      if (result.clearanceRefreshed && result.challenge) {
+        p.appendItem('', 'separator', {title: new RichText(coloredStr('Cloudflare не пропустил и после обновления проверки. ' + ELSEWHERE, red))});
+        return p.haveMore(false);
+      }
       if (result.clearanceRefreshed && !result.user && !result.network) {
         var at = /[?&]start=([^&]+)/.exec(url);
         redirectTo(p, 'login', {showAuth: false, resumeUrl: resume(at ? at[1] : '')});

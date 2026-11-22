@@ -87,9 +87,9 @@ exports.create = function (options) {
   //  The extension writes the cookie and the UA as two STPP SETs. They are
   //  one pair when the second arrives within PAIR_MS of the first, in
   //  either order; a half left alone that long is dropped, so a cookie
-  //  never travels with the UA of another transfer. Both items then show a
-  //  placeholder, so sending the same pair again is a change that Movian
-  //  reports.
+  //  never travels with the UA of another transfer. Each half is replaced
+  //  by a placeholder as it arrives, so sending it again, after a pair or a
+  //  dropped half, is a change that Movian reports.
   var PAIR_MS = 3000;
   function offerHalf() {
     if (pair.cookie === null || pair.ua === null) {
@@ -107,7 +107,6 @@ exports.create = function (options) {
     //  A "Clear" (or a newer transfer) before then moves gen on: drop this one.
     setTimeout(function () {
       if (pair.gen !== gen) return;
-      uaItem.value = 'сохранено вне настроек (длина: ' + ua.length + ')';
       handOver(cookie, ua, false);
     }, 0);
   }
@@ -161,6 +160,7 @@ exports.create = function (options) {
     if (!loaded || !v || v.indexOf('сохранено вне настроек') === 0) return;
     pair.ua = v;
     log('ua received, len=' + v.length);
+    uaItem.value = 'сохранено вне настроек (длина: ' + v.length + ')';
     offerHalf();
   });
   //  A session stored by an earlier version (in the store, or in the 0.8.0

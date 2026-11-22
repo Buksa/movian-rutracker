@@ -36,8 +36,9 @@ exports.DEFAULT_UA = DEFAULT_UA;
  *                  hosts; null otherwise. It holds no cf_clearance.
  *   clearance      the Clearance for url: {cookie, ua, persisted}; null
  *   clearanceHeld  a clearance is held, for url's host or another
- *   forgotten      a Forget left no Active Session: the Core Jar's auth
- *                  cookies stay hidden until a new Session is Active (#3)
+ *   forgotten      a Forget, or a declined Password Login, left no Active
+ *                  Session: the Core Jar's auth cookies stay hidden until a
+ *                  new Session is Active (#3, #42)
  * Returns {ua, cookies: [{name, value}], blankJar, blankClearance,
  * persisted}: blankJar hides all the Core Jar's auth cookies (the Clearance
  * the request carries is still sent: it is in cookies); blankClearance hides

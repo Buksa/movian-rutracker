@@ -21,6 +21,7 @@ exports.create = function (client, parser, session) {
         fields['cap_sid'] = captcha.sid;
         fields[captcha.field] = captcha.value;
       }
+      var started = session.generation();
       var res = client.login(fields);
       if (!res) return {status: 'network'};
       if (res.challenge) return {status: 'challenge'};
@@ -30,6 +31,8 @@ exports.create = function (client, parser, session) {
       //  follow it); the form again, or any other page, is not a login.
       var redirected = res.status >= 300 && res.status < 400;
       if (!redirected || parser.loginFailed(res.text)) return {status: 'failed'};
+      //  A Forget or Clear during the POST: its answer is not wanted any more.
+      if (session.generation() !== started) return {status: 'cancelled'};
       var check = session.submit({source: 'password', host: client.host, cookie: res.cookie, ua: res.clearance ? res.clearance.ua : client.defaultUA});
       //  A Forget, Clear or newer sign-in meanwhile: this login is not wanted any more.
       if (check.status === 'cancelled') return {status: 'cancelled'};
