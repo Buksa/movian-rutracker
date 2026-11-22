@@ -7,7 +7,7 @@
 const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
-const { loadPlugin } = require('./harness/movian');
+const { loadPlugin, takeLeaks } = require('./harness/movian');
 const { test, section, finish } = require('./harness/tap');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -37,10 +37,10 @@ test('loginName gives the same answer on repeated calls', function () {
     assert.strictEqual(parser.loginName(page), parser.loginName(page));
 });
 
-test('captcha extracts image, sid and field name', function () {
-    const html = '<div><img src="https://static.t-ru.org/captcha/x.jpg" alt=""></div>\n' +
-        '<input type="hidden" name="cap_sid" value="S1">\n<input class="reg-input" type="text" name="cap_code_q">';
-    assert.deepStrictEqual(plain(parser.captcha(html)), { image: 'static.t-ru.org/captcha/x.jpg', sid: 'S1', field: 'cap_code_q' });
+test('captcha reads the real sign-in form: image, sid, field and the site\'s message', function () {
+    assert.deepStrictEqual(plain(parser.captcha(fixture('login-captcha.html'))), {
+        image: 'static.rutracker.cc/captcha/abc.jpg', sid: 'SID123', field: 'cap_code_xyz',
+        message: 'Вы ввели неверное/неактивное имя пользователя или неверный пароль' });
     assert.strictEqual(parser.captcha(fixture('index-guest.html')), null);
 });
 
@@ -120,20 +120,132 @@ test('bookmarksPage tells a bookmarks page from a guest page or a challenge', fu
     assert.strictEqual(parser.bookmarksPage(fixture('forum-7.html')), true);
 });
 
+section('experimental clearance helper');
+
+test('only a clearance-only pair for an exact official HTTPS host is retained', function () {
+    const helper = rt.require('./src/bridge/clearance').create();
+    assert.strictEqual(helper.offer('https://rutracker.org/forum/', 'bb_guid=g1; cf_clearance=synthetic-clearance', 'BrowserUA/1'), true);
+    assert.deepStrictEqual(plain(helper.forUrl('https://rutracker.org/forum/login.php')), {
+        cookie: 'cf_clearance=synthetic-clearance',
+        ua: 'BrowserUA/1'
+    });
+    assert.strictEqual(helper.forUrl('https://sub.rutracker.org/forum/'), null);
+    assert.strictEqual(helper.forUrl('http://rutracker.org/forum/'), null);
+});
+
+test('the helper keeps only clearance from a browser jar with a guest session cookie', function () {
+    const helper = rt.require('./src/bridge/clearance').create();
+    assert.strictEqual(helper.offer('https://rutracker.org/forum/', 'cf_clearance=synthetic-clearance; bb_session=synthetic-session; bb_guid=g1', 'BrowserUA/1'), true);
+    assert.deepStrictEqual(plain(helper.forUrl('https://rutracker.org/forum/login.php')), {
+        cookie: 'cf_clearance=synthetic-clearance',
+        ua: 'BrowserUA/1'
+    });
+    assert.strictEqual(helper.offer('https://rutracker.org.evil.test/forum/', 'cf_clearance=synthetic-clearance', 'BrowserUA/1'), false);
+    assert.strictEqual(helper.offer('https://rutracker.net:8443/forum/', 'cf_clearance=synthetic-clearance', 'BrowserUA/1'), false);
+    assert.strictEqual(helper.offer('https://rutracker.org/forum/', 'cf_clearance=synthetic-clearance', ''), false);
+});
+
+test('expired restored clearance is rejected and does not replace a live pair', function () {
+    const helper = rt.require('./src/bridge/clearance').create();
+    assert.strictEqual(helper.offer('https://rutracker.org/forum/', 'cf_clearance=live', 'BrowserUA/1', Math.floor(Date.now() / 1000) + 3600), true);
+    assert.strictEqual(helper.restore('https://rutracker.org/forum/', 'expired', 'BrowserUA/2', 1), false);
+    assert.deepStrictEqual(plain(helper.forUrl('https://rutracker.org/forum/')), {
+        cookie: 'cf_clearance=live',
+        ua: 'BrowserUA/1'
+    });
+});
+
+test('expired clearance is discarded during request lookup and never crosses host boundaries', function () {
+    const helper = rt.require('./src/bridge/clearance').create();
+    assert.strictEqual(helper.restore('https://rutracker.org/forum/', 'expired', 'BrowserUA/1', 1), false);
+    assert.strictEqual(helper.active(), false);
+    assert.strictEqual(helper.restore('https://rutracker.org/forum/', 'valid', 'BrowserUA/1', Math.floor(Date.now() / 1000) + 3600), true);
+    assert.strictEqual(helper.forUrl('https://rutracker.net/forum/'), null);
+    assert.strictEqual(helper.forUrl('http://rutracker.org/forum/'), null);
+    assert.strictEqual(helper.forUrl('https://rutracker.org.evil.test/forum/'), null);
+});
+
 section('business/auth');
 
 const LOGIN_FAILED = '<h4 class="warnColor1 tCenter mrg_16">Вы ввели неверное имя или пароль</h4>';
 
-test('a login answered by a redirect that carries the error marker is failed, not ok', function () {
-    const client = { login: function () { return { status: 302, text: LOGIN_FAILED, challenge: false }; } };
-    const auth = rt.require('./src/business/auth').create(client, parser);
-    assert.strictEqual(auth.login('user', 'wrong', null).status, 'failed');
+/* The Session Coordinator as auth uses it; the next test keeps it in step
+ * with the real one. */
+function sessionStub(submitted, check) {
+    return {
+        ticket: function () { return {}; },
+        untrustJar: function () { return 1; },
+        submit: function (c) { submitted.push(c); return { status: check }; }
+    };
+}
+
+test('the session stub names only methods the real Session Coordinator has (#50)', function () {
+    /* Retro 2026-11-22: three session API changes in a row broke this file
+     * with "session.x is not a function". */
+    const clearance = rt.require('./src/bridge/clearance').create('https://rutracker.org');
+    const client = rt.require('./src/api/client').create('https://rutracker.org', clearance);
+    const real = rt.require('./src/bridge/session').create(client, parser, clearance);
+    Object.keys(sessionStub([], 'authenticated')).forEach(function (name) {
+        assert.strictEqual(typeof real[name], 'function', 'session.' + name + ' is not in src/bridge/session.js');
+    });
 });
 
-test('a login answered by a bare redirect is ok', function () {
-    const client = { login: function () { return { status: 302, text: '', challenge: false }; } };
-    const auth = rt.require('./src/business/auth').create(client, parser);
-    assert.strictEqual(auth.login('user', 'secret', null).status, 'ok');
+function loginWith(answer, check) {
+    const submitted = [];
+    const client = { host: 'rutracker.org', defaultUA: 'UA/1', login: function () { return answer; } };
+    const auth = rt.require('./src/business/auth').create(client, parser, sessionStub(submitted, check));
+    return { result: auth.login('user', 'secret', null), submitted: submitted };
+}
+
+test('a login answered by a redirect that carries the error marker is failed, not ok', function () {
+    const r = loginWith({ status: 302, text: LOGIN_FAILED, challenge: false, cookie: 'bb_session=s' }, 'authenticated');
+    assert.strictEqual(r.result.status, 'failed');
+    assert.strictEqual(r.submitted.length, 0);
+});
+
+test('a login answered by a bare redirect hands its cookies over as a Candidate Session', function () {
+    const r = loginWith({ status: 302, text: '', challenge: false, cookie: 'bb_session=s' }, 'authenticated');
+    assert.strictEqual(r.result.status, 'ok');
+    assert.deepStrictEqual(plain(r.submitted), [{ source: 'password', host: 'rutracker.org', cookie: 'bb_session=s', ua: 'UA/1', jarWrite: 1 }]);
+});
+
+test('a login whose Session Check fails is unverified, not ok', function () {
+    const r = loginWith({ status: 302, text: '', challenge: false, cookie: 'bb_session=s' }, 'challenge');
+    assert.deepStrictEqual(plain(r.result), { status: 'unverified', check: 'challenge' });
+});
+
+section('api/credentials');
+
+test('credentialsFor: what each request carries', function () {
+    const c = rt.require('./src/api/credentials');
+    const D = c.DEFAULT_UA, NONE = { ua: D, cookies: [], blankJar: true, blankClearance: false, persisted: false };
+    const ORG = 'https://rutracker.org/forum/index.php', NET = 'https://rutracker.net/forum/index.php';
+    const S = { cookie: 'bb_session=s; bb_ssl=1', ua: 'SessionUA' };
+    const C = { cookie: 'cf_clearance=c', ua: 'ClearUA' };
+    const P = { cookie: 'cf_clearance=p', ua: 'CoreUA', persisted: true };
+    function st(o) { return Object.assign({ baseHost: 'rutracker.org', session: null, clearance: null, clearanceHeld: false }, o); }
+    function cookies(h) { return h.split('; ').map(function (p) { return { name: p.split('=')[0], value: p.split('=')[1] }; }); }
+    [
+        ['plain http', 'http://rutracker.org/forum/', st({ session: S }), NONE],
+        ['lookalike host', 'https://evilrutracker.org/', st({ session: S }), NONE],
+        ['no Session, other official host', NET, st(), NONE],
+        ['no Session, chosen host, nothing held: the jar cf_clearance hidden, the rest as it is', ORG, st(), { ua: D, cookies: [], blankJar: false, blankClearance: true, persisted: false }],
+        ['clearance in memory', ORG, st({ clearance: C, clearanceHeld: true }), { ua: 'ClearUA', cookies: cookies(C.cookie), blankJar: false, blankClearance: false, persisted: false }],
+        ['clearance Core sends itself', ORG, st({ clearance: P, clearanceHeld: true }), { ua: 'CoreUA', cookies: [], blankJar: false, blankClearance: false, persisted: true }],
+        ['clearance held for another host', ORG, st({ clearanceHeld: true }), NONE],
+        ['Active Session alone', ORG, st({ session: S }), { ua: 'SessionUA', cookies: cookies(S.cookie), blankJar: false, blankClearance: true, persisted: false }],
+        //  One copy of cf_clearance: the Clearance travels with the Session, and its UA.
+        ['Active Session and a Clearance in memory', ORG, st({ session: S, clearance: C, clearanceHeld: true }), { ua: 'ClearUA', cookies: cookies(S.cookie + '; ' + C.cookie), blankJar: false, blankClearance: false, persisted: false }],
+        ['Active Session and a Clearance Core sends', ORG, st({ session: S, clearance: P, clearanceHeld: true }), { ua: 'CoreUA', cookies: cookies(S.cookie), blankJar: false, blankClearance: false, persisted: true }],
+        ['Active Session without a UA', ORG, st({ session: { cookie: 'bb_session=s', ua: '' } }), { ua: D, cookies: cookies('bb_session=s'), blankJar: false, blankClearance: true, persisted: false }],
+        //  After a Forget (#3) the Core Jar's auth cookies are hidden until a new Session is Active.
+        ['forgotten, nothing held: the Core Jar auth cookies hidden', ORG, st({ forgotten: true }), { ua: D, cookies: [], blankJar: true, blankClearance: false, persisted: false }],
+        ['forgotten, clearance in memory: only the Clearance goes', ORG, st({ forgotten: true, clearance: C, clearanceHeld: true }), { ua: 'ClearUA', cookies: cookies(C.cookie), blankJar: true, blankClearance: false, persisted: false }],
+        ['forgotten, clearance Core sends itself: the jar copy hidden, Core\'s record stays', ORG, st({ forgotten: true, clearance: P, clearanceHeld: true }), { ua: 'CoreUA', cookies: [], blankJar: true, blankClearance: false, persisted: true }],
+        ['forgotten, another official host: as before', NET, st({ forgotten: true }), NONE],
+    ].forEach(function (row) {
+        assert.deepStrictEqual(plain(c.credentialsFor(row[1], row[2])), row[3], row[0]);
+    });
 });
 
 section('vendor/movian-cookie-bridge (Movian side)');
@@ -147,36 +259,30 @@ function session(r, profile, extra) {
     const mod = r.require('./vendor/movian-cookie-bridge/movian-session');
     return mod.create(Object.assign({
         profile: profile, title: profile, icon: '',
-        check: function () { return { status: 'authenticated', user: 'u' }; }
+        check: function () { return { status: 'authenticated', user: 'u' }; },
+        onSession: function () { return true; }
     }, extra || {}));
 }
 
-function inspect(s, url) {
-    const ctrl = { url: url, cookies: {}, setCookie: function (k, v) { this.cookies[k] = v; } };
-    s.applyToRequest(ctrl);
-    return ctrl.cookies;
-}
-
-test('HDRezka and RuTracker sessions stay isolated inside one Movian', function () {
-    const r = runtime();
-    const ru = session(r, 'rutracker');
-    const hd = session(r, 'hdrezka', { hosts: ['hdrezka.me'] });
-    r.stppSet('settings.apps.nodes.HDRezka.nodes.browserCookie.value', 'dle_user_id=7; PHPSESSID=hd');
-    assert.strictEqual(ru.active(), false, 'an HDRezka write must not reach RuTracker');
-    assert.deepStrictEqual(plain(inspect(hd, 'https://hdrezka.me/')), { dle_user_id: '7', PHPSESSID: 'hd' });
-    assert.deepStrictEqual(plain(inspect(hd, 'https://rutracker.org/')), {});
-    r.stppSet('settings.apps.nodes.rutracker_bridge.nodes.browserCookie.value', 'bb_session=ru');
-    assert.deepStrictEqual(plain(inspect(ru, 'https://rutracker.org/forum/')), { bb_session: 'ru' });
-    assert.deepStrictEqual(plain(inspect(ru, 'https://hdrezka.me/')), {});
-    assert.deepStrictEqual(plain(inspect(hd, 'https://hdrezka.me/')), { dle_user_id: '7', PHPSESSID: 'hd' });
-    assert.ok(r.stores.HDRezka.cookie.indexOf('PHPSESSID') !== -1 && r.stores.rutracker_bridge.cookie === 'bb_session=ru');
+test('without onSession the module refuses to start: it keeps no session of its own', function () {
+    const mod = runtime().require('./vendor/movian-cookie-bridge/movian-session');
+    assert.throws(function () {
+        mod.create({ profile: 'rutracker', title: 'x', icon: '', check: function () {} });
+    }, /onSession/);
 });
 
-test('a profile without domains sends nothing unless the plugin names its hosts', function () {
+test('HDRezka and RuTracker transfers stay isolated inside one Movian', function () {
     const r = runtime();
-    const hd = session(r, 'hdrezka');
-    r.stppSet('settings.apps.nodes.HDRezka.nodes.browserCookie.value', 'PHPSESSID=hd');
-    assert.deepStrictEqual(plain(inspect(hd, 'https://hdrezka.me/')), {});
+    const got = { ru: [], hd: [] };
+    session(r, 'rutracker', { onSession: function (c) { got.ru.push(c); return true; } });
+    session(r, 'hdrezka', { onSession: function (c) { got.hd.push(c); return true; } });
+    r.stppSet('settings.apps.nodes.HDRezka.nodes.browserCookie.value', 'dle_user_id=7; PHPSESSID=hd');
+    r.stppSet('settings.apps.nodes.HDRezka.nodes.browserUA.value', 'UA/1');
+    r.flush();
+    r.stppSet('settings.apps.nodes.rutracker_bridge.nodes.browserCookie.value', 'bb_session=ru');
+    r.stppSet('settings.apps.nodes.rutracker_bridge.nodes.browserUA.value', 'UA/1');
+    r.flush();
+    assert.deepStrictEqual(got, { ru: ['bb_session=ru'], hd: ['dle_user_id=7; PHPSESSID=hd'] });
 });
 
 test('an existing settings group can host the bridge items (HDRezka keeps its paths)', function () {
@@ -184,8 +290,135 @@ test('an existing settings group can host the bridge items (HDRezka keeps its pa
     const settings = r.require('movian/settings');
     const own = new settings.globalSettings('HDRezka', 'HDRezka', '', '');
     own.createBool('someOption', 'x', true, function () {});
-    session(r, 'hdrezka', { group: own, hosts: ['hdrezka.me'] });
+    session(r, 'hdrezka', { group: own });
     assert.ok(r.item('HDRezka', 'someOption') && r.item('HDRezka', 'browserCookie'), 'items share the group');
+});
+
+/* onSession: the plugin keeps the session; the module only hands over each
+ * cookie + User-Agent pair that arrived together. The extension writes the
+ * cookie first, then the UA (bridge-core.js stppSetMessages). */
+const RU = 'settings.apps.nodes.rutracker_bridge.nodes.';
+
+function handOver(r, extra) {
+    const got = [];
+    const s = session(r, 'rutracker', Object.assign({
+        onSession: function (cookie, ua, stored) { got.push({ cookie: cookie, ua: ua, stored: stored }); return true; }
+    }, extra || {}));
+    return { s: s, got: got };
+}
+
+function send(r, cookie, ua) {
+    if (cookie !== undefined) r.stppSet(RU + 'browserCookie.value', cookie);
+    if (ua !== undefined) r.stppSet(RU + 'browserUA.value', ua);
+    r.flush();
+}
+
+test('onSession: a cookie and its UA are handed over once, in either order', function () {
+    const r = runtime();
+    const b = handOver(r);
+    send(r, 'bb_session=a', 'UA/1');
+    r.stppSet(RU + 'browserUA.value', 'UA/2');
+    r.stppSet(RU + 'browserCookie.value', 'bb_session=b');
+    r.flush();
+    assert.deepStrictEqual(plain(b.got), [
+        { cookie: 'bb_session=a', ua: 'UA/1', stored: false },
+        { cookie: 'bb_session=b', ua: 'UA/2', stored: false }
+    ]);
+});
+
+test('onSession: half a pair is handed over never, and is dropped', function () {
+    const r = runtime();
+    const b = handOver(r);
+    send(r, 'bb_session=a');
+    send(r, undefined, 'UA/1');
+    assert.deepStrictEqual(plain(b.got), [], 'a cookie and a UA from two transfers are not a pair');
+});
+
+test('onSession: a UA that comes a second after its cookie still makes the pair', function () {
+    /* Found live on M7: two STPP writes 0.5 s apart were dropped as two
+     * halves by a 300 ms window. */
+    const r = runtime();
+    const b = handOver(r);
+    r.stppSet(RU + 'browserCookie.value', 'bb_session=a');
+    r.tick(1000);
+    r.stppSet(RU + 'browserUA.value', 'UA/1');
+    r.tick(0);
+    assert.deepStrictEqual(plain(b.got), [{ cookie: 'bb_session=a', ua: 'UA/1', stored: false }]);
+});
+
+test('onSession: a half left alone for 3 s is dropped', function () {
+    const r = runtime();
+    const b = handOver(r);
+    r.stppSet(RU + 'browserCookie.value', 'bb_session=a');
+    r.tick(3000);
+    r.stppSet(RU + 'browserUA.value', 'UA/1');
+    r.tick(3000);
+    assert.deepStrictEqual(plain(b.got), []);
+});
+
+test('onSession: a new cookie is never paired with the UA of an earlier transfer', function () {
+    const r = runtime();
+    const b = handOver(r);
+    send(r, 'bb_session=a', 'UA/1');
+    send(r, 'bb_session=b');
+    assert.deepStrictEqual(plain(b.got).map(function (x) { return x.cookie; }), ['bb_session=a']);
+});
+
+test('onSession: sending the same session again hands it over again', function () {
+    const r = runtime();
+    const b = handOver(r);
+    send(r, 'bb_session=a', 'UA/1');
+    send(r, 'bb_session=a', 'UA/1');
+    assert.strictEqual(b.got.length, 2);
+});
+
+test('onSession: the module keeps no copy of the session', function () {
+    const r = runtime();
+    const b = handOver(r);
+    send(r, 'bb_session=secret-a; bb_guid=g', 'UA/1');
+    assert.strictEqual(b.s, undefined, 'no interface to read it back');
+    assert.strictEqual(JSON.stringify(r.stores).indexOf('secret-a'), -1, 'store');
+    assert.strictEqual(JSON.stringify(r.settingsStore).indexOf('secret-a'), -1, 'settings');
+    assert.ok(/cookies: 2/.test(r.item('rutracker_bridge', 'browserCookie').value));
+});
+
+test('onSession: the extension "Clear session" hands over an empty pair', function () {
+    const r = runtime();
+    const b = handOver(r);
+    send(r, 'bb_session=a', 'UA/1');
+    send(r, '', '');
+    assert.deepStrictEqual(plain(b.got[1]), { cookie: '', ua: '', stored: false });
+});
+
+test('onSession: the check and clear actions call check() and hand over an empty pair', function () {
+    const r = runtime();
+    let checks = 0;
+    const b = handOver(r, { check: function () { checks++; } });
+    r.item('rutracker_bridge', 'bridgeCheck').action();
+    r.item('rutracker_bridge', 'bridgeClear').action();
+    assert.strictEqual(checks, 1);
+    assert.deepStrictEqual(plain(b.got), [{ cookie: '', ua: '', stored: false }]);
+});
+
+test('onSession: a session an earlier version stored is handed over once, then dropped', function () {
+    [
+        { name: 'store', stores: { rutracker_bridge: { cookie: 'bb_session=old' } }, settings: { rutracker_bridge: { browserUA: 'OldUA/1' } } },
+        { name: '0.8.0 settings', stores: {}, settings: { rutracker_bridge: { browserCookie: 'bb_session=old', browserUA: 'OldUA/1' } } }
+    ].forEach(function (c) {
+        const r = runtime({ stores: c.stores, settings: c.settings });
+        const b = handOver(r);
+        assert.deepStrictEqual(plain(b.got), [{ cookie: 'bb_session=old', ua: 'OldUA/1', stored: true }], c.name);
+        assert.strictEqual(JSON.stringify(r.stores).indexOf('bb_session=old'), -1, c.name + ': old store copy dropped');
+        assert.strictEqual(JSON.stringify(r.settingsStore).indexOf('bb_session=old'), -1, c.name + ': settings copy dropped');
+        const again = runtime({ stores: r.stores, settings: r.settingsStore });
+        assert.deepStrictEqual(plain(handOver(again).got), [], c.name + ': handed over once');
+    });
+});
+
+test('onSession: a stored session the plugin did not accept is kept for the next start', function () {
+    const r = runtime({ stores: { rutracker_bridge: { cookie: 'bb_session=old' } }, settings: { rutracker_bridge: { browserUA: 'OldUA/1' } } });
+    session(r, 'rutracker', { onSession: function () { return false; } });
+    assert.strictEqual(r.stores.rutracker_bridge.cookie, 'bb_session=old');
 });
 
 test('classify: logged-in view, challenge, guest page, HTTP error, no response', function () {
@@ -199,6 +432,24 @@ test('classify: logged-in view, challenge, guest page, HTTP error, no response',
     assert.strictEqual(mod.classify(res(200, 'guest page /cdn-cgi/challenge-platform/'), login).status, 'rejected');
     assert.strictEqual(mod.classify(res(502, 'bad gateway'), login).status, 'network_error');
     assert.strictEqual(mod.classify(null, login).status, 'network_error');
+});
+
+section('tests/harness (session cookie invariant)');
+
+test('a session cookie sent off its host or over http is reported', function () {
+    const r = loadPlugin({ pluginDir: ROOT, entry: false, server: function () { return { status: 200, body: '' }; } });
+    r.require('native/io').httpInspectorCreate('https?://.*', function (ctrl) { ctrl.setCookie('bb_session', 'S1'); });
+    const http = r.require('movian/http');
+    http.request('https://rutracker.org/forum/index.php');
+    http.request('https://rutracker.net/forum/index.php');
+    assert.deepStrictEqual(takeLeaks(), []);
+    http.request('https://mirror.example/forum/login.php');
+    http.request('http://rutracker.org/forum/login.php');
+    const leaks = takeLeaks();
+    assert.strictEqual(leaks.length, 2);
+    assert.ok(/bb_session sent to mirror\.example/.test(leaks[0]), leaks[0]);
+    assert.ok(/bb_session over plain http/.test(leaks[1]), leaks[1]);
+    assert.ok(leaks.join(' ').indexOf('S1') < 0, 'no cookie value in the report');
 });
 
 finish();

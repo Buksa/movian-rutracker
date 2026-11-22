@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "title": "Вход на RuTracker.org",
+    "captchaImage": "../logo.png",
+    "captchaMessage": "Вы ввели неверное/неактивное имя пользователя или неверный пароль",
+    "username": "TestUser",
+    "password": "",
+    "captchaCode": ""
+  }
+}

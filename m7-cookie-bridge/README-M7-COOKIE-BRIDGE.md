@@ -23,7 +23,7 @@
     ↓ STPP ws://127.0.0.1:42000/api/stpp   [3, 0, path, value] — loopback (LAN — только по галочке)
 M7: settings.apps.nodes.rutracker_bridge.nodes.browserCookie.value
     settings.apps.nodes.rutracker_bridge.nodes.browserUA.value
-    ↓ movian-session.js: cookie сразу уходит из дерева настроек в store плагина
+    ↓ movian-session.js: пара cookie + UA сразу уходит из дерева настроек в плагин (onSession)
     ↓ HTTP-инспектор: cookies только https://rutracker.org|net, UA браузера
 Плагин: проверка viewforum.php (вид «вошёл как …») → статус → каталог/поиск/раздача
 ```
@@ -44,12 +44,12 @@ logo.png                        иконка плагина (plugin.json → ico
 src/ui/settings.js              страница настроек «RuTracker.org» → объект config
 src/ui/routes.js                маршруты, глобальный поиск, item hook
 src/business/catalog.js         главная, разделы, поиск, избранное, раздача → данные
-src/business/auth.js            легаси-вход по логину/паролю, капча, выход
+src/business/auth.js            легаси-вход по логину/паролю, капча
 src/api/client.js               HTTP: URL, заголовки на каждый запрос, инспекторы, .torrent
 src/api/parser.js               HTML → данные (регулярки + gumbo DOM для атрибутов)
 src/bridge/rutracker-adapter.js чем RuTracker подтверждает сессию
 vendor/movian-cookie-bridge/    универсальная часть Bridge (без знаний о сайтах)
-  movian-session.js             Movian-сторона: группа настроек, store, scope, статусы
+  movian-session.js             Movian-сторона: группа настроек, передача пары cookie + UA
   bridge-core.js                копия m7-cookie-bridge/extension/lib/bridge-core.js
 m7-cookie-bridge/extension/     расширение Chrome/Brave (MV3)
 m7-cookie-bridge/tools/         orca-session-push.js, package.sh
@@ -67,10 +67,11 @@ vendor`. `api/client.js` получает сессию Bridge параметро
 **Новый сайт/плагин.** Профиль — одна запись в `bridge-core.js`
 (`settingsGroup`, `domains`, `defaultDomain`, `movianRoute`); попап и транспорт
 не меняются. Плагин копирует `vendor/movian-cookie-bridge/` и вызывает
-`require('./vendor/movian-cookie-bridge/movian-session').create({profile, check, …})`.
-Для профиля без фиксированных доменов (HDRezka) плагин передаёт `hosts`, иначе
-cookies не отправляются никуда; существующую группу настроек можно передать в
-`group`, чтобы не менять пути.
+`require('./vendor/movian-cookie-bridge/movian-session').create({profile, onSession, check, …})`.
+Модуль сессию не хранит и никуда не отправляет: каждую пару cookie + UA он
+отдаёт в `onSession`, а хранит, проверяет и подставляет в запросы её сам
+плагин (у RuTracker — Session Coordinator), только на свои домены.
+Существующую группу настроек можно передать в `group`, чтобы не менять пути.
 
 ## Установка и обновление
 

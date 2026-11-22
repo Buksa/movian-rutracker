@@ -480,12 +480,42 @@ test('live leak scan reports names only and tells the store from a leak', functi
             return spawnSync(process.execPath, [path.join(ROOT, 'tools', 'live', 'leakscan.js'), '--db', fake.dbPath, dir],
                 { encoding: 'utf8' });
         };
-        fs.mkdirSync(path.join(dir, 'plugins', 'rutracker@local', 'store'), { recursive: true });
-        fs.writeFileSync(path.join(dir, 'plugins', 'rutracker@local', 'store', 'rutracker_bridge'), '{"c":"bb_session=' + SECRET + '"}');
+        const store = path.join(dir, 'plugins', 'rutracker@local', 'store');
+        fs.mkdirSync(store, { recursive: true });
+        fs.writeFileSync(path.join(store, 'rutracker_session'), '{"session":{"cookie":"bb_session=' + SECRET + '"}}');
         fs.writeFileSync(path.join(dir, 'movian-0.log'), 'nothing here');
         let res = scan();
         assert.strictEqual(res.status, 0, res.stdout + res.stderr);
-        assert.ok(/store .*rutracker_bridge: bb_session/.test(res.stdout), res.stdout);
+        assert.ok(/store .*rutracker_session: bb_session/.test(res.stdout), res.stdout);
+
+        /* The Cookie Bridge's own store keeps no copy after the migration. */
+        fs.writeFileSync(path.join(store, 'rutracker_bridge'), '{"cookie":"bb_session=' + SECRET + '"}');
+        res = scan();
+        assert.strictEqual(res.status, 1, 'a copy in the old bridge store is a leak');
+        assert.ok(/LEAK  .*rutracker_bridge: bb_session/.test(res.stdout), res.stdout);
+        fs.rmSync(path.join(store, 'rutracker_bridge'));
+
+        /* --values: synthetic secrets instead of the Orca cookie DB. */
+        const values = path.join(dir, 'values.txt');
+        fs.writeFileSync(values, '# synthetic\nbb_session=' + SECRET + '\n');
+        res = spawnSync(process.execPath, [path.join(ROOT, 'tools', 'live', 'leakscan.js'), '--values', values, store], { encoding: 'utf8' });
+        assert.strictEqual(res.status, 0, res.stdout + res.stderr);
+        assert.ok(/looked for 1 values \(bb_session\)/.test(res.stdout), res.stdout);
+        fs.rmSync(values);
+
+        /* --store: the run's own Active Session, from the coordinator store. */
+        const byStore = function () {
+            return spawnSync(process.execPath, [path.join(ROOT, 'tools', 'live', 'leakscan.js'), '--store', path.join(store, 'rutracker_session'), dir], { encoding: 'utf8' });
+        };
+        res = byStore();
+        assert.strictEqual(res.status, 0, res.stdout + res.stderr);
+        assert.ok(/looked for 1 values \(bb_session\)/.test(res.stdout), res.stdout);
+        fs.writeFileSync(path.join(dir, 'trace.log'), 'value=' + SECRET);
+        res = byStore();
+        assert.strictEqual(res.status, 1, 'a value in the trace is a leak');
+        assert.ok(/LEAK  trace\.log: bb_session/.test(res.stdout), res.stdout);
+        assert.strictEqual((res.stdout + res.stderr).indexOf(SECRET), -1, 'value printed');
+        fs.rmSync(path.join(dir, 'trace.log'));
 
         fs.writeFileSync(path.join(dir, 'movian-0.log'), 'Cookie: cf_clearance=' + SECRET2);
         res = scan();
@@ -508,27 +538,39 @@ test('live STPP reader takes the child-vector frame Movian sends unclosed', func
     assert.strictEqual(parseFrame('not json'), null);
 });
 
-test('live stop.sh stops and wipes only a directory start.sh set up', function () {
-    /* A LIVE_DIR typo, or another Movian's profile (persistent/ + cache/,
-     * as /tmp/mdev/dev has), must survive: only start.sh's marker makes a
-     * directory ours. No processes are involved: there are no pid files. */
+test('live stop scripts preserve profiles by default and wipe only on explicit request', function () {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'live-stop-'));
-    const stop = function () {
-        return spawnSync('sh', [path.join(ROOT, 'tools', 'live', 'stop.sh')],
+    const runStop = function (script, args) {
+        return spawnSync('sh', [path.join(ROOT, 'tools', 'live', script)].concat(args || []),
             { encoding: 'utf8', env: Object.assign({}, process.env, { LIVE_DIR: dir }) });
     };
     try {
         fs.mkdirSync(path.join(dir, 'persistent', 'plugins'), { recursive: true });
         fs.mkdirSync(path.join(dir, 'cache'));
         fs.writeFileSync(path.join(dir, 'persistent', 'plugins', 'keep'), 'x');
-        let res = stop();
+        let res = runStop('stop.sh');
         assert.notStrictEqual(res.status, 0, 'a directory without the marker is refused');
         assert.ok(fs.existsSync(path.join(dir, 'persistent', 'plugins', 'keep')), 'foreign profile wiped');
 
         fs.writeFileSync(path.join(dir, '.rutracker-live'), '');
-        res = stop();
+        res = runStop('stop.sh');
         assert.strictEqual(res.status, 0, res.stderr);
-        assert.ok(!fs.existsSync(path.join(dir, 'persistent')), 'own profile kept');
+        assert.ok(fs.existsSync(path.join(dir, 'persistent', 'plugins', 'keep')), 'M7 profile was not preserved');
+        assert.ok(fs.existsSync(path.join(dir, '.rutracker-live')), 'profile marker was not preserved');
+        res = runStop('stop.sh', ['--wipe']);
+        assert.strictEqual(res.status, 0, res.stderr);
+        assert.ok(!fs.existsSync(path.join(dir, 'persistent')), 'explicit wipe kept profile');
+
+        fs.mkdirSync(path.join(dir, 'persistent'), { recursive: true });
+        fs.mkdirSync(path.join(dir, 'cache'));
+        fs.writeFileSync(path.join(dir, '.rutracker-mgo-live'), '');
+        res = runStop('mgo-stop.sh');
+        assert.strictEqual(res.status, 0, res.stderr);
+        assert.ok(fs.existsSync(path.join(dir, 'persistent')), 'MGO profile was not preserved');
+        assert.ok(fs.existsSync(path.join(dir, '.rutracker-mgo-live')), 'MGO profile marker was not preserved');
+        res = runStop('mgo-stop.sh', ['--wipe']);
+        assert.strictEqual(res.status, 0, res.stderr);
+        assert.ok(!fs.existsSync(path.join(dir, 'persistent')), 'explicit MGO wipe kept profile');
     } finally {
         fs.rmSync(dir, { recursive: true, force: true });
     }

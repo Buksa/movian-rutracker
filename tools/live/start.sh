@@ -1,9 +1,8 @@
 #!/bin/sh
 # Starts a private Movian M7 for a live check of the plugin: its own Xvfb
 # display, profile and cache under $LIVE_DIR, and the plugin installed from
-# a ZIP the way Movian installs plugins. Prints the PID and the HTTP port;
-# tools/live/stop.sh undoes all of it. A start that fails after Xvfb is up
-# stops what it started and exits non-zero.
+# a ZIP the way Movian installs plugins. stop.sh preserves the profile by
+# default; pass stop.sh --wipe after E2E/session work is complete.
 #
 #   tools/live/start.sh [plugin.zip]     (default: build one with package.sh)
 #
@@ -17,6 +16,7 @@
 # Another Movian may already hold :42000. This one takes whatever port
 # Movian picks, found by PID, and stop.sh stops only this PID.
 set -e
+umask 077
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 . "$ROOT/tools/live/lib.sh"
 MOVIAN_DIR=${MOVIAN_DIR:?set MOVIAN_DIR to a Movian M7 tree with build.debug/movian}
@@ -36,8 +36,13 @@ fi
 
 ZIP=${1:-$("$ROOT/m7-cookie-bridge/tools/package.sh" | head -1)}
 mkdir -p "$LIVE_DIR/persistent/mrp/installed" "$LIVE_DIR/cache"
-# stop.sh stops and wipes only a directory that carries this marker.
+chmod 700 "$LIVE_DIR" "$LIVE_DIR/persistent" "$LIVE_DIR/persistent/mrp" "$LIVE_DIR/persistent/mrp/installed" "$LIVE_DIR/cache"
+chmod -R go-rwx "$LIVE_DIR/persistent" "$LIVE_DIR/cache"
+# stop.sh operates only on directories carrying this marker.
 : > "$LIVE_DIR/.rutracker-live"
+: > "$LIVE_DIR/movian.log"
+: > "$LIVE_DIR/xvfb.log"
+chmod 600 "$LIVE_DIR/movian.log" "$LIVE_DIR/xvfb.log"
 # swinst expects <id>@<origin>.zip and crashes on a name without "@".
 cp "$ZIP" "$LIVE_DIR/persistent/mrp/installed/rutracker@local.zip"
 

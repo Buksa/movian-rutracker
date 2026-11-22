@@ -5,9 +5,13 @@
  *     node tests/run.js
  *
  *   1. ES5.1 syntax of all code that runs inside Movian's Duktape
- *   2. tests/modules.test.js          - the plugin's pure modules
- *   3. tests/plugin.test.js           - plugin behaviour under a Movian stand-in
- *   4. m7-cookie-bridge/tests/run.js  - bridge core, extension, Orca tool
+ *   2. tests/plugin.test.js           - no assertion message joins a title list
+ *   2b. docs/agents/live-e2e.md       - every tool in tools/live/ is named there
+ *   3. tests/modules.test.js          - the plugin's pure modules
+ *   4. tests/session.test.js          - the Session Coordinator
+ *   5. tests/plugin.test.js           - plugin behaviour under a Movian stand-in
+ *   6. tests/live-kit.test.js         - the live-run helper kit
+ *   7. m7-cookie-bridge/tests/run.js  - bridge core, extension, Orca tool
  *
  * The ES5 check parses with the acorn copy bundled in Node itself
  * (--expose-internals), so no package manager is needed.
@@ -55,6 +59,44 @@ function es5Check(files) {
     return res.status === 0;
 }
 
+/* Issue #26: an assertion message is one short line, never the whole title list.
+ * A line-based match: an assert.* line that calls .join( directly on a title
+ * list. Receivers are matched by name: t, first, titles(...). A title list
+ * under another name is not caught (shortcut: extend the names when one appears).
+ * `titles(...).slice(0, 3).join(` has a .slice receiver, so it is not matched. */
+function titleJoinCheck(rel) {
+    console.log('=== assertion messages (' + rel + ')');
+    const bad = [];
+    fs.readFileSync(path.join(ROOT, rel), 'utf8').split('\n').forEach(function (line, i) {
+        if (/assert\./.test(line) && /\b(?:t|first|titles\([^)]*\))\.join\(/.test(line)) bad.push(i + 1);
+    });
+    bad.forEach(function (n) {
+        console.log('FAIL  ' + rel + ':' + n + ': assertion message joins a title list (use brief(t))');
+    });
+    if (!bad.length) console.log('  ok  no title-list join in an assertion message');
+    return bad.length === 0;
+}
+
+/* Every live tool is named in the live procedure, so nobody has to find one by
+ * chance (retro 2026-11-21: tools/live/page.js was written because stpp.js page
+ * was not documented). A tool is matched by its file name. */
+const LIVE_DOC_EXEMPT = {
+    'lib.sh': 'a helper sourced by the live scripts, not a tool'
+};
+
+function liveDocCheck() {
+    console.log('\n=== live tools named in docs/agents/live-e2e.md');
+    const doc = fs.readFileSync(path.join(ROOT, 'docs/agents/live-e2e.md'), 'utf8');
+    const missing = fs.readdirSync(path.join(ROOT, 'tools/live')).filter(function (name) {
+        return !LIVE_DOC_EXEMPT[name] && doc.indexOf(name) < 0;
+    });
+    missing.forEach(function (name) {
+        console.log('FAIL  tools/live/' + name + ' is not named in docs/agents/live-e2e.md');
+    });
+    if (!missing.length) console.log('  ok  every tool in tools/live/ is named');
+    return missing.length === 0;
+}
+
 function suite(rel) {
     console.log('\n=== ' + rel);
     const res = spawnSync(process.execPath, [path.join(ROOT, rel)], { cwd: ROOT, stdio: 'inherit' });
@@ -65,8 +107,12 @@ const files = duktapeSources();
 console.log('=== ES5 syntax (' + files.length + ' files run by Duktape)');
 const results = [
     es5Check(files) && (console.log('  ok  ' + files.join(', ')), true),
+    titleJoinCheck('tests/plugin.test.js'),
+    liveDocCheck(),
     suite('tests/modules.test.js'),
+    suite('tests/session.test.js'),
     suite('tests/plugin.test.js'),
+    suite('tests/live-kit.test.js'),
     suite('m7-cookie-bridge/tests/run.js')
 ];
 const failed = results.filter(function (ok) { return !ok; }).length;

@@ -1,7 +1,7 @@
 /*
  * Fake rutracker.org for the plugin tests: serves the sanitized fixtures in
  * tests/fixtures/ and models the few server behaviours the plugin depends on
- * (session cookie, Cloudflare challenge, legacy login, torrent download).
+ * (session cookie, Cloudflare challenge, Password Login, torrent download).
  */
 'use strict';
 
@@ -11,6 +11,9 @@ const path = require('path');
 const FIXTURES = path.join(__dirname, 'fixtures');
 const SESSION = 'bb_session';
 const VALID = 'valid-session-token';
+/* A second account: its session is valid and its pages show OTHER_USER. */
+const OTHER_VALID = 'other-valid-session';
+const OTHER_USER = 'OtherUser';
 const CLEARANCE = 'valid-clearance';
 const BROWSER_UA = 'Mozilla/5.0 (X11; Linux x86_64) BrowserUA/1.0';
 const TORRENT = Buffer.from('d8:announce35:http://bt.t-ru.org/ann?magnet4:infod4:name4:teste' + 'e');
@@ -30,9 +33,10 @@ const CF_JSD = '<script>(function(){function c(){var b=a.contentDocument;if(b){v
 
 /* Pages captured logged in; `guest` turns the account link into the login
  * link a guest sees, so a rejected session gets a guest page everywhere. */
-function html(name, guest) {
+function html(name, guest, user) {
     let body = fixture(name);
     if (guest) body = body.replace(/<a id="logged-in-username"[^>]*>[^<]*<\/a>/, '<a href="login.php">Вход</a>');
+    if (user) body = body.replace(/(<a id="logged-in-username"[^>]*>)TestUser(<\/a>)/, '$1' + user + '$2');
     if (body.indexOf('challenge-platform') === -1) body = body.replace('</body>', CF_JSD + '</body>');
     return { status: 200, headers: { 'Content-Type': 'text/html; charset=windows-1251' }, body: body };
 }
@@ -52,37 +56,60 @@ function emptySearch(page) {
  *   cloudflare: true  -> requests without the bridge cf_clearance + browser UA
  *                        get the real "Just a moment..." 403 challenge
  *                        (index.php excepted, as on the live site)
+ *   cloudflare: 'pages' -> the same, but login.php passes too (how the live
+ *                        site treats login.php has not been observed)
+ *   clearance: 'value' -> the cf_clearance the challenge takes (default
+ *                        CLEARANCE); read per request, so a test may change it
+ *                        to make the site refuse the pair it held
+ *   loginCookies: [...] -> the Set-Cookie headers of a successful login; by
+ *                        default one bb_session (not yet compared with a
+ *                        capture of the live login)
  *   down: true        -> every request fails at the network level
- *   captcha: true     -> login answers with the captcha form
+ *   captcha: true     -> login answers with the captcha form (the real page)
+ *   captchaCode: 'x'  -> ... and again, with a new picture, SID and code
+ *                        field, unless the last ones come with code 'x'
  *   loginPage: 'unrecognized' -> login answers 200 with a page that has
  *                        neither the error marker nor a redirect
  *   pagerFailure: 'down' | 'challenge' -> the pager links (search_id=…) fail
  *                        at the network level, or get the Cloudflare challenge
+ *   emptyForum: true  -> viewforum.php answers with a real forum that has no
+ *                        subforums and no topics (f=203, captured 2026-11-21:
+ *                        "В этом форуме нет сообщений")
  */
 function server(options) {
     options = options || {};
     const state = { logins: [] };
+    /* The fixture's own challenge; every captcha answered again is a new one. */
+    let cap = { round: 0, sid: 'SID123', field: 'cap_code_xyz' };
+    let pagerChallengeServed = false;
 
     function handler(req) {
         if (options.down) return { error: 'Connection refused' };
         const u = new URL(req.url);
-        if (u.hostname !== 'rutracker.org') return { status: 404, body: 'not found' };
-        if (options.pagerFailure && u.searchParams.has('search_id')) {
+        /* rutracker.net is the official mirror: the same site. */
+        if (u.hostname !== 'rutracker.org' && u.hostname !== 'rutracker.net') return { status: 404, body: 'not found' };
+        if (u.searchParams.has('search_id')) {
             if (options.pagerFailure === 'down') return { error: 'Connection refused' };
-            return { status: 403, headers: { 'Content-Type': 'text/html; charset=UTF-8', 'cf-mitigated': 'challenge' }, body: fixture('cf-challenge.html') };
+            if (options.pagerFailure === 'challenge' ||
+                    (options.pagerFailure === 'challenge-once' && !pagerChallengeServed)) {
+                pagerChallengeServed = true;
+                return { status: 403, headers: { 'Content-Type': 'text/html; charset=UTF-8', 'cf-mitigated': 'challenge' }, body: fixture('cf-challenge.html') };
+            }
         }
         /* Like the live site: Cloudflare challenges forum and tracker pages
          * without a valid cf_clearance + matching UA, but not index.php. */
         if (options.cloudflare && u.pathname !== '/forum/index.php' &&
-                !(req.cookies.cf_clearance === CLEARANCE && req.headers['user-agent'] === BROWSER_UA)) {
+                !(options.cloudflare === 'pages' && u.pathname === '/forum/login.php') &&
+                !(req.cookies.cf_clearance === (options.clearance || CLEARANCE) && req.headers['user-agent'] === BROWSER_UA)) {
             return { status: 403, headers: { 'Content-Type': 'text/html; charset=UTF-8', 'cf-mitigated': 'challenge' }, body: fixture('cf-challenge.html') };
         }
-        const authed = req.cookies[SESSION] === VALID;
+        const other = req.cookies[SESSION] === OTHER_VALID;
+        const authed = req.cookies[SESSION] === VALID || other;
         switch (u.pathname) {
         case '/forum/index.php':
-            return html(authed ? 'index.html' : 'index-guest.html');
+            return html(authed ? 'index.html' : 'index-guest.html', false, other ? OTHER_USER : undefined);
         case '/forum/viewforum.php':
-            return html('forum-7.html', !authed);
+            return html(options.emptyForum ? 'forum-203.html' : 'forum-7.html', !authed, other ? OTHER_USER : undefined);
         case '/forum/tracker.php': {
             /* Like the site: whole words, or a word start with "*". This one
              * only knows "matrix"; pager links (search_id) carry no query. */
@@ -102,18 +129,25 @@ function server(options) {
             return { status: 200, headers: { 'Content-Type': 'application/x-bittorrent' }, body: TORRENT };
         case '/forum/login.php': {
             const p = req.postdata || {};
+            /* The site's logout answers 302 and expires bb_session, but the
+             * Session it named stays valid on the server: live (E2E,
+             * 2026-10-18) the old cookie was still signed in on the next
+             * request. So nothing is revoked here, whatever form_token says. */
             if (p.logout) return { status: 302, headers: { Location: 'index.php' }, setCookies: [SESSION + '=deleted'] };
             state.logins.push({ username: p.login_username, hasPassword: !!p.login_password, cap: p.cap_sid });
             if (options.loginPage === 'unrecognized') return html('index-guest.html', true);
-            if (options.captcha && !p.cap_sid) {
-                return { status: 200, headers: { 'Content-Type': 'text/html; charset=windows-1251' },
-                    body: '<h4 class="warnColor1 tCenter mrg_16">Вы ввели неверный пароль</h4>' +
-                        '<div><img src="https://static.t-ru.org/captcha/abc.jpg" alt="pic"></div>\n' +
-                        '<input type="hidden" name="cap_sid" value="SID123">\n' +
-                        '<input class="reg-input" type="text" name="cap_code_xyz" value="">' };
+            if (options.captcha && (!p.cap_sid || (options.captchaCode && (p.cap_sid !== cap.sid || p[cap.field] !== options.captchaCode)))) {
+                if (p.cap_sid) cap = { round: cap.round + 1, sid: 'SID123-' + (cap.round + 1), field: 'cap_code_xyz' + (cap.round + 1) };
+                const page = html('login-captcha.html', true);
+                if (cap.round) {
+                    page.body = page.body.replace('captcha/abc.jpg', 'captcha/abc-' + cap.round + '.jpg')
+                        .replace('value="SID123"', 'value="' + cap.sid + '"').replace('name="cap_code_xyz"', 'name="' + cap.field + '"');
+                }
+                return page;
             }
             if (p.login_username === 'user' && p.login_password === 'secret-password') {
-                return { status: 302, headers: { Location: 'index.php' }, setCookies: [SESSION + '=' + VALID + '; path=/forum/'] };
+                return { status: 302, headers: { Location: 'index.php' },
+                    setCookies: options.loginCookies || [SESSION + '=' + VALID + '; path=/forum/'] };
             }
             return { status: 200, headers: { 'Content-Type': 'text/html; charset=windows-1251' },
                 body: '<h4 class="warnColor1 tCenter mrg_16">Вы ввели неверное имя или пароль</h4>' };
@@ -130,6 +164,8 @@ module.exports = {
     server: server,
     SESSION: SESSION,
     VALID: VALID,
+    OTHER_VALID: OTHER_VALID,
+    OTHER_USER: OTHER_USER,
     CLEARANCE: CLEARANCE,
     BROWSER_UA: BROWSER_UA,
     TORRENT: TORRENT,

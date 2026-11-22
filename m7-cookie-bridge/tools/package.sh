@@ -12,7 +12,7 @@ EV=$(version "$ROOT/m7-cookie-bridge/extension/manifest.json")
 mkdir -p "$DIST"
 rm -f "$DIST/RuTracker.org-$PV-m7-bridge.zip" "$DIST/movian-cookie-bridge-extension-$EV.zip"
 cd "$ROOT"
-zip -qr -X "$DIST/RuTracker.org-$PV-m7-bridge.zip" plugin.json main.js logo.png src vendor
+zip -qr -X "$DIST/RuTracker.org-$PV-m7-bridge.zip" plugin.json main.js logo.png src vendor views
 TMP=$(mktemp -d)
 cp -r m7-cookie-bridge/extension "$TMP/movian-cookie-bridge-extension"
 (cd "$TMP" && zip -qr -X "$DIST/movian-cookie-bridge-extension-$EV.zip" movian-cookie-bridge-extension)

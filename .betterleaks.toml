@@ -1,0 +1,13 @@
+# Betterleaks: the default rules, plus the synthetic values the tests and
+# views use for a password (AGENTS.md: fixtures stay sanitized).
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Synthetic test passwords, a GLW constant and Russian UI labels"
+targetRules = ["generic-password"]
+regexTarget = "secret"
+regexes = [
+    '''^(secret-password|sanitized-password|wrong|PASSWORD)$''',
+    '''^[а-яё ]+$''',
+]

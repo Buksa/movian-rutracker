@@ -1,0 +1,10 @@
+# agnix lints the agent instruction files (AGENTS.md, CLAUDE.md).
+exclude = [
+    ".git/**",
+    # Movian's plugin manifest, not a Claude Code plugin.
+    "plugin.json",
+    # Ignored local agent state.
+    ".codex/**",
+    ".claude/**",
+    ".rtk/**",
+]

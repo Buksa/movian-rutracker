@@ -3,8 +3,15 @@
  * Drives the Movian started by tools/live/start.sh over its HTTP API and STPP.
  *
  *   node tools/live/stpp.js open <route>            navigate (GET /api/open)
- *   node tools/live/stpp.js page [max]              print the current page:
- *                                                   type | title | url
+ *   node tools/live/stpp.js page [max] [--open <route>]
+ *                                                   print the current page: its route,
+ *                                                   title, loading, error, then
+ *                                                   type | title | url per item.
+ *                                                   --open first opens the route and
+ *                                                   waits until the page it replaced has
+ *                                                   loaded (loading is 0) or failed;
+ *                                                   it exits 1 after STPP_WAIT_MS (15000)
+ *                                                   and prints what it has
  *   node tools/live/stpp.js set <prop.path> <value> write one property (STPP SET);
  *                                                   value is JSON, else a string
  *
@@ -60,29 +67,91 @@ function set(propPath, raw) {
     });
 }
 
+function openRoute(route) {
+    return fetch('http://127.0.0.1:' + port() + '/api/open?url=' + encodeURIComponent(route));
+}
+
 function open(route) {
-    fetch('http://127.0.0.1:' + port() + '/api/open?url=' + encodeURIComponent(route))
+    openRoute(route)
         .then(function (res) { console.log('open ' + route + ' -> HTTP ' + res.status); })
         .catch(function (e) { console.error(e.message); process.exit(1); });
 }
 
-function page(max) {
+/* route: null prints the current page after a fixed settle. A route is opened
+ * and the wait ends on the first of: loading is 0, an error, or the timeout,
+ * counting only values sent after the first url notification that follows
+ * /api/open. Items of the old page are dropped at that notification. */
+function page(max, route) {
     var next = 100;
     var subs = {};
     var page = {};
     var order = [];
     var items = {};
+    var opened = false;
+    var replaced = false;
+    var settling = false;
+    var settleTimer = null;
+    var waitMs = parseInt(process.env.STPP_WAIT_MS || '15000', 10);
+    var ws;
     function sub(ws, propref, prop, cb) {
         var id = next++;
         subs[id] = cb;
         ws.send(JSON.stringify([1, id, propref, prop])); /* SUBSCRIBE */
     }
-    var ws = connect(function (ws) {
-        var base = 'navigators.current.currentpage.model.';
-        ['metadata.title', 'loading', 'error'].forEach(function (f) {
-            sub(ws, 0, base + f, function (v) { page[f] = v; });
+    function show(code) {
+        /* a value Movian did not resend since the route changed is unknown: print null */
+        var known = function (v) { return v === undefined ? null : v; };
+        console.log('route: ' + JSON.stringify(known(page.url)) + '  title: ' + JSON.stringify(known(page['metadata.title'])) +
+            '  loading=' + known(page.loading) + '  error=' + JSON.stringify(known(page.error)) + '  items=' + order.length);
+        order.slice(0, max).forEach(function (id) {
+            var i = items[id];
+            var title = String(i['metadata.title']).replace(/<[^>]+>/g, '');
+            console.log('  ' + String(i.type).padEnd(10) + '| ' + title.slice(0, 70) + ' | ' + String(i.url).slice(0, 70));
         });
-        sub(ws, 0, base + 'nodes', function (msg) {
+        ws.close();
+        process.exit(code);
+    }
+    function check() {
+        if (!opened) {
+            if (page.url === undefined) return; /* the first route value, before /api/open */
+            opened = true;
+            openRoute(route).then(function (res) {
+                if (!res.ok) { console.error('open ' + route + ' -> HTTP ' + res.status); process.exit(1); }
+            }).catch(function (e) { console.error(e.message); process.exit(1); });
+            return;
+        }
+        if (!replaced) return;
+        /* shortcut: Movian sends the error just after loading 0 (navigator.c:990), so wait 100 ms
+         * for it; a page whose error comes later than that prints error=null. A url change within
+         * the 100 ms cancels the timer (the plugin redirects after loading false, routes.js paged()). */
+        if ((page.loading === 0 || page.error) && !settling) {
+            settling = true;
+            settleTimer = setTimeout(function () {
+                settling = false;
+                if (page.loading === 0 || page.error) show(0);
+            }, 100);
+        }
+    }
+    ws = connect(function (ws) {
+        var base = 'navigators.current.currentpage.';
+        sub(ws, 0, base + 'url', function (v) {
+            if (opened) {
+                /* Any url after /api/open means the page is being replaced, also for the same
+                 * route and for null (Movian Go sends null first). The old page's loading,
+                 * error and items must not end the wait. */
+                replaced = true;
+                clearTimeout(settleTimer);
+                settling = false;
+                page.loading = page.error = undefined;
+                order = [];
+            }
+            page.url = v;
+            if (route !== null) check();
+        });
+        ['metadata.title', 'loading', 'error'].forEach(function (f) {
+            sub(ws, 0, base + 'model.' + f, function (v) { page[f] = v; if (route !== null) check(); });
+        });
+        sub(ws, 0, base + 'model.nodes', function (msg) {
             if (!msg || msg[0] !== 5) return; /* ADDNODES */
             msg[3].forEach(function (id) {
                 order.push(id);
@@ -98,26 +167,35 @@ function page(max) {
         if (!m || !subs[m[1]]) return;
         subs[m[1]](m[0] === 4 ? m[2] : m); /* NOTIFY carries the value */
     };
-    setTimeout(function () {
-        console.log('title: ' + JSON.stringify(page['metadata.title']) + '  loading=' + page.loading +
-            '  error=' + JSON.stringify(page.error) + '  items=' + order.length);
-        order.slice(0, max).forEach(function (id) {
-            var i = items[id];
-            var title = String(i['metadata.title']).replace(/<[^>]+>/g, '');
-            console.log('  ' + String(i.type).padEnd(10) + '| ' + title.slice(0, 70) + ' | ' + String(i.url).slice(0, 70));
-        });
-        ws.close();
-        process.exit(0);
-    }, 2500);
+    if (route === null) {
+        setTimeout(function () { show(0); }, 2500);
+    } else {
+        setTimeout(function () {
+            console.error('timeout: the page did not load within ' + waitMs + ' ms');
+            show(1);
+        }, waitMs);
+    }
+}
+
+function usage() {
+    console.error('usage: stpp.js open <route> | page [max] [--open <route>] | set <prop.path> <value>');
+    process.exit(2);
 }
 
 function main() {
     var cmd = process.argv[2];
-    if (cmd === 'open' && process.argv[3]) return open(process.argv[3]);
-    if (cmd === 'page') return page(parseInt(process.argv[3] || '20', 10));
-    if (cmd === 'set' && process.argv[3] && process.argv[4] !== undefined) return set(process.argv[3], process.argv[4]);
-    console.error('usage: stpp.js open <route> | page [max] | set <prop.path> <value>');
-    process.exit(2);
+    var args = process.argv.slice(3);
+    if (cmd === 'open' && args[0]) return open(args[0]);
+    if (cmd === 'set' && args[0] && args[1] !== undefined) return set(args[0], args[1]);
+    if (cmd !== 'page') return usage();
+    var max = 20;
+    var route = null;
+    for (var i = 0; i < args.length; i++) {
+        if (args[i] === '--open' && args[i + 1] !== undefined) route = args[++i];
+        else if (/^\d+$/.test(args[i])) max = parseInt(args[i], 10);
+        else return usage();
+    }
+    page(max, route);
 }
 
 if (require.main === module) {

@@ -1,0 +1,26 @@
+# The project toolchain: developers, hooks and CI run these versions.
+[tools]
+node = "24.22.1"
+hk = "2.12.0"
+pkl = "0.33.0"
+betterleaks = "1.10.1"
+shellcheck = "0.11.0"
+jactionlint = "2.6.0"
+"github:agent-sh/agnix" = "0.61.0"
+"npm:oxlint" = "1.93.0"
+
+[env]
+# Betterleaks loads no config of the scanned tree on its own.
+BETTERLEAKS_CONFIG = "{{config_root}}/.betterleaks.toml"
+
+[tasks.check]
+description = "Every check: the one command CI and the hooks run"
+run = [
+    "hk check --all",
+    # Secrets anywhere in the history, not only in the current files.
+    "betterleaks git --no-banner --redact .",
+]
+
+[tasks.fix]
+description = "Safe autofixes"
+run = "hk fix --all"

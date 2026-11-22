@@ -1,0 +1,16 @@
+{
+  "rules": {
+    // ES5.1 (Duktape) has no optional catch binding: the parameter must stay.
+    "no-unused-vars": ["warn", { "caughtErrors": "none" }],
+    // startsWith / endsWith are ES2015; Movian M7 runs ES5.1.
+    "unicorn/prefer-string-starts-ends-with": "off"
+  },
+  "overrides": [
+    {
+      // Duktape runs these; the escapes are harmless and its regexp lexer
+      // is not tested on unescaped "/" or "[" in a class.
+      "files": ["main.js", "src/**", "vendor/**", "m7-cookie-bridge/extension/lib/**"],
+      "rules": { "no-useless-escape": "off" }
+    }
+  ]
+}

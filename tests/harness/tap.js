@@ -4,14 +4,38 @@
 let passed = 0;
 const failures = [];
 
-function test(name, fn) {
-    try {
-        fn();
+function record(name, err) {
+    if (!err) {
         passed++;
         console.log('  ok  ' + name);
+        return;
+    }
+    failures.push({ name: name, err: err });
+    console.log('FAIL  ' + name + '\n      ' + (err && err.stack || err).toString().split('\n').slice(0, 3).join('\n      '));
+}
+
+function test(name, fn) {
+    require('./movian').takeLeaks(); // a failed test must not hand its leaks on
+    try {
+        fn();
+        const leaks = require('./movian').takeLeaks();
+        if (leaks.length) throw new Error('Secret leaked: ' + leaks.join('; '));
+        record(name);
     } catch (err) {
-        failures.push({ name: name, err: err });
-        console.log('FAIL  ' + name + '\n      ' + (err && err.stack || err).toString().split('\n').slice(0, 3).join('\n      '));
+        record(name, err);
+    }
+}
+
+/* For tests that wait on a child process or a socket: await it, then finish(). */
+async function testAsync(name, fn) {
+    require('./movian').takeLeaks(); // the same leak check as test()
+    try {
+        await fn();
+        const leaks = require('./movian').takeLeaks();
+        if (leaks.length) throw new Error('Secret leaked: ' + leaks.join('; '));
+        record(name);
+    } catch (err) {
+        record(name, err);
     }
 }
 
@@ -26,4 +50,4 @@ function finish() {
     if (failures.length) process.exitCode = 1;
 }
 
-module.exports = { test: test, section: section, finish: finish };
+module.exports = { test: test, testAsync: testAsync, section: section, finish: finish };
