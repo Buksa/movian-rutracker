@@ -18,6 +18,17 @@ exports.create = function (client, parser) {
     return parser.topicRows(text, 'forum').filter(function (row) { return row.title !== '1'; });
   }
 
+  //  What every page result says about the page itself: the account it
+  //  shows, and whether the answer was a page at all (client.page()).
+  function withPage(result, got) {
+    result.user = parser.loginName(got.text);
+    result.clearanceRefreshed = got.refreshed;
+    result.network = got.network;
+    result.challenge = got.challenge;
+    result.httpError = got.httpError;
+    return result;
+  }
+
   return {
     //  {user, forums, network}: user is the logged-in account name or null;
     //  network is true when the request got no response at all, so the
@@ -33,43 +44,31 @@ exports.create = function (client, parser) {
 
     forum: function (url) {
       var got = client.page(url), text = got.text;
-      return {
+      return withPage({
         subforums: parser.subforums(text),
         topics: forumTopics(text),
         next: next(text, 'bottom_info'),
-        user: parser.loginName(text),
-        clearanceRefreshed: got.refreshed,
-        network: got.network,
-        challenge: got.challenge,
-      };
+      }, got);
     },
 
     //  loaded: false when the site sent no bookmarks page (network, Cloudflare, guest).
     bookmarks: function (url) {
       var got = client.page(url), text = got.text;
-      return {
+      return withPage({
         loaded: parser.bookmarksPage(text),
         topics: forumTopics(text),
         next: next(text, 'bottom_info'),
-        user: parser.loginName(text),
-        clearanceRefreshed: got.refreshed,
-        network: got.network,
-        challenge: got.challenge,
-      };
+      }, got);
     },
 
     //  noRefresh: see client.page().
     search: function (url, noRefresh) {
       var got = client.page(url, noRefresh), text = got.text;
-      return {
+      return withPage({
         loaded: parser.searchResults(text),
         topics: parser.topicRows(text, 'tracker'),
         next: next(text, 'bottom_info'),
-        user: parser.loginName(text),
-        clearanceRefreshed: got.refreshed,
-        network: got.network,
-        challenge: got.challenge,
-      };
+      }, got);
     },
 
     //  A topic page. On the first page the opening post is the release
@@ -77,10 +76,7 @@ exports.create = function (client, parser) {
     topic: function (url, firstPage) {
       var got = client.page(url);
       var p = parser.topicPage(got.text, firstPage);
-      p.user = parser.loginName(got.text);
-      p.clearanceRefreshed = got.refreshed;
-      p.network = got.network;
-      p.challenge = got.challenge;
+      withPage(p, got);
       if (p.post.torrent) p.post.torrent = client.url.resolve(p.post.torrent);
       if (p.download) p.download = client.forum + p.download;
       if (p.dl) p.dl = client.forum + p.dl;

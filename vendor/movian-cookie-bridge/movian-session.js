@@ -65,6 +65,9 @@ exports.classify = function (response, loginName) {
  *                pair for "Clear session"; and once, with stored = true, a
  *                session an earlier version stored, whose copy is then
  *                dropped. Required: the module keeps no session itself.
+ *   onTransfer   optional function () called when a pair arrives; what it
+ *                returns is onSession's fourth argument, when the deferred
+ *                hand-over runs
  *   check        optional function () for the "check session" action
  *   group        optional settings group object to add the items to; by
  *                default a new group named after profile.settingsGroup
@@ -72,6 +75,7 @@ exports.classify = function (response, loginName) {
  */
 exports.create = function (options) {
   var handOver = options.onSession;
+  var onTransfer = options.onTransfer;
   if (typeof handOver !== 'function') throw new Error('movian-session: onSession is required');
   var profile = core.profile(options.profile);
   var id = profile.settingsGroup;
@@ -103,11 +107,14 @@ exports.create = function (options) {
     }
     var cookie = pair.cookie, ua = pair.ua, gen = pair.gen + 1;
     pair = {cookie: null, ua: null, gen: gen};
+    //  The plugin's mark of when the transfer arrived (onTransfer), so what
+    //  it did meanwhile, such as a Forget, can cancel this one.
+    var mark = onTransfer ? onTransfer() : undefined;
     //  Out of the settings callback: the plugin checks the session online.
     //  A "Clear" (or a newer transfer) before then moves gen on: drop this one.
     setTimeout(function () {
       if (pair.gen !== gen) return;
-      handOver(cookie, ua, false);
+      handOver(cookie, ua, false, mark);
     }, 0);
   }
 

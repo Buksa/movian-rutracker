@@ -36,7 +36,10 @@ exports.create = function (title, logo, client, session, clearance) {
     icon: logo,
     description: 'Сессия из браузера для обхода Cloudflare',
     check: session.recheck,
-    onSession: function (cookie, ua, stored) {
+    //  A transfer starts when it arrives: a Forget or Clear before its
+    //  deferred hand-over cancels it.
+    onTransfer: session.ticket,
+    onSession: function (cookie, ua, stored, ticket) {
       var c = {source: 'bridge', host: host, cookie: cookie, ua: ua};
       if (stored) return session.adopt(c);
       if (!cookie) {
@@ -45,7 +48,7 @@ exports.create = function (title, logo, client, session, clearance) {
         if (session.source() === 'bridge') session.drop();
         return true;
       }
-      var res = session.submit(c);
+      var res = session.submit(c, ticket);
       if (res.status === 'cancelled') {
         notify('Cookie Bridge: проверка отменена, сессию забыли или очистили во время проверки, либо начат другой вход');
         return true;

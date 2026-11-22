@@ -159,10 +159,12 @@ exports.register = function (ctx) {
       p.loading = true;
       var result = fetch(url, n + 1);
       p.loading = false;
-      //  No response, or the challenge again, is not a guest page: a
-      //  warning shows, not Password Login.
-      if (result.clearanceRefreshed && result.challenge) {
-        p.appendItem('', 'separator', {title: new RichText(coloredStr('Cloudflare не пропустил и после обновления проверки. ' + ELSEWHERE, red))});
+      //  No response, the challenge again or an HTTP error is not a guest
+      //  page: a warning shows, not Password Login.
+      if (result.clearanceRefreshed && (result.challenge || result.httpError)) {
+        p.appendItem('', 'separator', {title: new RichText(coloredStr(result.challenge ?
+          'Cloudflare не пропустил и после обновления проверки. ' + ELSEWHERE :
+          'Сайт не вернул страницу после обновления проверки Cloudflare (HTTP ' + result.httpError + '): откройте страницу снова', red))});
         return p.haveMore(false);
       }
       if (result.clearanceRefreshed && !result.user && !result.network) {

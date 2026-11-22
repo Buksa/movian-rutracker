@@ -225,6 +225,46 @@ function lines(out) {
     return out.split('\n').filter(Boolean);
 }
 
+section('tools/sync-public.sh');
+
+/* Only in a checkout of this repository: the mirror and the copy the script
+ * tests have no sync script or no .git. */
+const SYNCABLE = fs.existsSync(path.join(ROOT, '.git')) && fs.existsSync(path.join(ROOT, 'tools/sync-public.sh'));
+
+test('--check fails when the copy list lacks a file the tests read, and leaves the mirror alone (#49)', function () {
+    /* Retro 2026-11-22: since #38 tests/run.js reads docs/agents/live-e2e.md,
+     * which the copy list lacked; only the real run's last step noticed. */
+    if (!SYNCABLE) return;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-public-'));
+    /* A commit hook runs this with GIT_DIR, GIT_INDEX_FILE and the like set
+     * for this repository: the clone's git must not see them. */
+    const env = {};
+    Object.keys(process.env).forEach(function (k) { if (k.indexOf('GIT_') !== 0) env[k] = process.env[k]; });
+    const git = function (cwd, args) {
+        const res = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'core.hooksPath=/dev/null'].concat(args), { cwd: cwd, env: env, encoding: 'utf8' });
+        assert.strictEqual(res.status, 0, args.join(' ') + ': ' + res.stderr);
+    };
+    try {
+        const repo = path.join(dir, 'repo');
+        const pub = path.join(dir, 'pub');
+        git(dir, ['clone', '-q', ROOT, repo]);
+        const script = path.join(repo, 'tools/sync-public.sh');
+        /* The working copy of the script: the one under test, committed or not. */
+        fs.writeFileSync(script, fs.readFileSync(path.join(ROOT, 'tools/sync-public.sh'), 'utf8').replace('\ndocs/agents/live-e2e.md ', '\n'));
+        git(repo, ['commit', '-q', '-am', 'the copy list lacks a file the tests read']);
+        fs.mkdirSync(pub);
+        git(pub, ['init', '-q']);
+        git(pub, ['remote', 'add', 'origin', 'https://github.com/Buksa/movian-rutracker.git']);
+        const res = spawnSync('sh', [script, pub, '--check'], { env: env, encoding: 'utf8' });
+        assert.notStrictEqual(res.status, 0, 'the check passed');
+        assert.ok(/missing from CODE/.test(res.stderr), res.stderr);
+        assert.deepStrictEqual(fs.readdirSync(pub), ['.git'], 'the mirror was touched');
+    }
+    finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
 section('tools/live/stpp.js');
 
 (async function () {

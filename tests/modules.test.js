@@ -169,11 +169,31 @@ section('business/auth');
 
 const LOGIN_FAILED = '<h4 class="warnColor1 tCenter mrg_16">Вы ввели неверное имя или пароль</h4>';
 
+/* The Session Coordinator as auth uses it; the next test keeps it in step
+ * with the real one. */
+function sessionStub(submitted, check) {
+    return {
+        ticket: function () { return {}; },
+        untrustJar: function () { return 1; },
+        submit: function (c) { submitted.push(c); return { status: check }; }
+    };
+}
+
+test('the session stub names only methods the real Session Coordinator has (#50)', function () {
+    /* Retro 2026-11-22: three session API changes in a row broke this file
+     * with "session.x is not a function". */
+    const clearance = rt.require('./src/bridge/clearance').create('https://rutracker.org');
+    const client = rt.require('./src/api/client').create('https://rutracker.org', clearance);
+    const real = rt.require('./src/bridge/session').create(client, parser, clearance);
+    Object.keys(sessionStub([], 'authenticated')).forEach(function (name) {
+        assert.strictEqual(typeof real[name], 'function', 'session.' + name + ' is not in src/bridge/session.js');
+    });
+});
+
 function loginWith(answer, check) {
     const submitted = [];
     const client = { host: 'rutracker.org', defaultUA: 'UA/1', login: function () { return answer; } };
-    const session = { ticket: function () { return {}; }, untrustJar: function () { return 1; }, submit: function (c) { submitted.push(c); return { status: check }; } };
-    const auth = rt.require('./src/business/auth').create(client, parser, session);
+    const auth = rt.require('./src/business/auth').create(client, parser, sessionStub(submitted, check));
     return { result: auth.login('user', 'secret', null), submitted: submitted };
 }
 

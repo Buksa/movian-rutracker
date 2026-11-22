@@ -209,8 +209,10 @@ exports.create = function (baseUrl, clearance) {
         }
       }
       //  network: no response at all (text is then ''); challenge: the
-      //  answer is still Cloudflare's challenge.
-      return {text: result ? result.text : '', refreshed: refreshed, network: !result, challenge: challenge};
+      //  answer is still Cloudflare's challenge; httpError: another HTTP
+      //  error status (0 when none).
+      var httpError = result && !challenge && result.res.statuscode >= 400 ? result.res.statuscode : 0;
+      return {text: result ? result.text : '', refreshed: refreshed, network: !result, challenge: challenge, httpError: httpError};
     },
     setClearanceRefresh: function (fn) {
       refreshClearance = fn;

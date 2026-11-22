@@ -698,6 +698,26 @@ test('a challenge again after the automatic refresh is reported, not taken for a
     assert.ok(t.some(function (s) { return /Cloudflare/.test(s); }), brief(t));
     assert.strictEqual(page.more, false, 'paging stops');
 });
+test('an HTTP error after the automatic refresh is reported, not taken for a guest page (#53)', function () {
+    /* Codex on the mirror PR: `network` means no response at all, so a 503
+     * after the refresh sent a signed-in user to Password Login. */
+    const site = fake.server({ cloudflare: true });
+    let forumPages = 0;
+    const h = load({
+        server: function (req) {
+            if (/viewforum\.php/.test(req.url) && !req.opts.noAuth && ++forumPages === 2) return { status: 503, headers: {}, body: '' };
+            return site(req);
+        },
+        jar: { 'rutracker.org': { bb_session: fake.VALID } },
+        popup: { web: { result: 'userclose', cookies: { cf_clearance: fake.CLEARANCE }, ua: fake.BROWSER_UA } }
+    });
+    const page = h.open(FORUM_URL);
+    assert.strictEqual(h.webpopups.length, 1, 'one refresh');
+    assert.deepStrictEqual(page.redirects, [], 'no Password Login');
+    const t = titles(page);
+    assert.ok(t.some(function (s) { return /HTTP 503/.test(s); }), brief(t));
+    assert.strictEqual(page.more, false, 'paging stops');
+});
 test('an expired Core Jar session after clearance resumes the same forum category through Password Login', function () {
     const title = 'Зарубежное кино';
     const route = 'rutracker:forum:7:0:' + encodeURIComponent(title);
@@ -1927,6 +1947,18 @@ test('a UA half left alone does not block the same pair sent again (#44)', funct
     h.tick(3001);
     pushSession(h);
     assert.ok(bridgeCookiesOn(h, 'https://rutracker.org/forum/index.php'), 'the retried pair is the session');
+});
+
+test('a Forget before the deferred hand-over cancels the Cookie Bridge transfer (#52)', function () {
+    /* Codex on the mirror PR: the hand-over runs from a timer and submit()
+     * took the generation only then, so the Forget did not cancel it. */
+    const h = load();
+    h.stppSet(BRIDGE + 'browserCookie.value', fake.browserCookie());
+    h.stppSet(BRIDGE + 'browserUA.value', fake.BROWSER_UA);
+    h.open('rutracker:forget');
+    h.flush();
+    assert.strictEqual(h.context.session.active(), false, 'no Active Session');
+    assert.strictEqual(h.context.session.forgotten(), true, 'the Forget holds');
 });
 
 /* ------------------------------------------------------------------ */
