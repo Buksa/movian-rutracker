@@ -19,36 +19,64 @@ exports.create = function (client, parser) {
   }
 
   return {
-    //  {user, forums}: user is the logged-in account name or null.
+    //  {user, forums, network}: user is the logged-in account name or null;
+    //  network is true when the request got no response at all, so the
+    //  empty forums are not an empty page.
     index: function () {
-      var text = client.page(client.url.index);
+      var got = client.page(client.url.index), text = got.text;
       return {
         user: parser.loginName(text),
         forums: parser.subforums(text).filter(function (f) { return MEDIA_FORUMS.test(f.title); }),
+        network: got.network,
       };
     },
 
     forum: function (url) {
-      var text = client.page(url);
-      return {subforums: parser.subforums(text), topics: forumTopics(text), next: next(text, 'bottom_info')};
+      var got = client.page(url), text = got.text;
+      return {
+        subforums: parser.subforums(text),
+        topics: forumTopics(text),
+        next: next(text, 'bottom_info'),
+        user: parser.loginName(text),
+        clearanceRefreshed: got.refreshed,
+        network: got.network,
+      };
     },
 
     //  loaded: false when the site sent no bookmarks page (network, Cloudflare, guest).
     bookmarks: function (url) {
-      var text = client.page(url);
-      return {loaded: parser.bookmarksPage(text), topics: forumTopics(text), next: next(text, 'bottom_info')};
+      var got = client.page(url), text = got.text;
+      return {
+        loaded: parser.bookmarksPage(text),
+        topics: forumTopics(text),
+        next: next(text, 'bottom_info'),
+        user: parser.loginName(text),
+        clearanceRefreshed: got.refreshed,
+        network: got.network,
+      };
     },
 
-    //  loaded: false when the site sent no result page (network, Cloudflare).
-    search: function (url) {
-      var text = client.page(url);
-      return {loaded: parser.searchResults(text), topics: parser.topicRows(text, 'tracker'), next: next(text, 'bottom_info')};
+    //  noRefresh: see client.page().
+    search: function (url, noRefresh) {
+      var got = client.page(url, noRefresh), text = got.text;
+      return {
+        loaded: parser.searchResults(text),
+        topics: parser.topicRows(text, 'tracker'),
+        next: next(text, 'bottom_info'),
+        user: parser.loginName(text),
+        clearanceRefreshed: got.refreshed,
+        network: got.network,
+      };
     },
 
     //  A topic page. On the first page the opening post is the release
     //  (poster, text, torrent/magnet links); later pages are comments only.
     topic: function (url, firstPage) {
-      var p = parser.topicPage(client.page(url), firstPage);
+      var got = client.page(url);
+      var p = parser.topicPage(got.text, firstPage);
+      p.user = parser.loginName(got.text);
+      p.clearanceRefreshed = got.refreshed;
+      p.network = got.network;
       if (p.post.torrent) p.post.torrent = client.url.resolve(p.post.torrent);
       if (p.download) p.download = client.forum + p.download;
       if (p.dl) p.dl = client.forum + p.dl;

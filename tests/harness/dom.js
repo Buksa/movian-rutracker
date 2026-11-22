@@ -34,7 +34,7 @@ function Element(name, attrs) {
 
 function parseAttrs(src) {
     const out = [];
-    const re = /([^\s=\/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g;
+    const re = /([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g;
     let m;
     while ((m = re.exec(src))) {
         const value = m[2] !== undefined ? m[2] : m[3] !== undefined ? m[3] : m[4] !== undefined ? m[4] : '';

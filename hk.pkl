@@ -1,0 +1,27 @@
+amends "package://github.com/jdx/hk/releases/download/v2.12.0/hk@2.12.0#/Config.pkl"
+import "package://github.com/jdx/hk/releases/download/v2.12.0/hk@2.12.0#/Builtins.pkl"
+
+// `mise run check` runs the check hook on every file, then the history
+// scan; CI runs the same task.
+local linters = new Mapping<String, Step> {
+    ["shellcheck"] = Builtins.shellcheck
+    ["jactionlint"] = Builtins.jactionlint
+    ["betterleaks"] = Builtins.betterleaks
+    ["ox_lint"] = Builtins.ox_lint
+    ["agnix"] {
+        glob = List("**/AGENTS.md", "**/CLAUDE.md", ".agnix.toml")
+        check = "agnix --strict ."
+    }
+    // ES5 syntax, modules, the plugin against the fake site, the bridge.
+    ["tests"] {
+        glob = List("**/*.js", "**/*.json", "**/*.view", "**/*.html", "**/*.sh")
+        check = "node tests/run.js"
+    }
+}
+
+hooks {
+    ["pre-commit"] { steps = linters }
+    ["pre-push"] { steps = linters }
+    ["check"] { steps = linters }
+    ["fix"] { fix = true; steps = linters }
+}

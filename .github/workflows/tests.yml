@@ -6,14 +6,23 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      # The same Node as local runs: the suite needs node:sqlite and the
-      # bundled acorn (ES5 check), both present in 24.
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version: 24
-      - run: node tests/run.js
+          # The secrets scan reads the whole history.
+          fetch-depth: 0
+          persist-credentials: false
+      # The tools and Node versions of mise.toml, as on a developer's machine.
+      - uses: jdx/mise-action@236a21c3b91f5db6d4e174b348674a0f0caac06d # v5.2.9
+      - run: mise run check

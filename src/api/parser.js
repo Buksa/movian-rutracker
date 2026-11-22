@@ -11,6 +11,7 @@ var html = require('movian/html');
 var LOGIN = /"logged-in-username".*?>([\s\S]*?)<\//;
 var AUTH_FAIL = /class=".*?mrg_16">/;
 var CAPTCHA = /<div><img src=".*?\/\/(.*?)"[\s\S]*?<input type="hidden" name="cap_sid" value="(.*?)">[\s\S]*?<input .*?type="text" name="(.*?)"/;
+var WARNING = /<h4 class="warnColor1[^"]*">([\s\S]*?)<\/h4>/;
 var SEED = /class="seed">.*<b>([\d]{0,200}?)<\/b>/;
 var LEECH = /class="leech">.*<b>([\d]{0,200}?)<\/b>/;
 //  Loop expressions get a fresh instance per call for the same reason.
@@ -61,7 +62,7 @@ exports.loginFailed = function (text) {
 
 exports.captcha = function (text) {
   var m = CAPTCHA.exec(String(text || ''));
-  return m ? {image: m[1], sid: m[2], field: m[3]} : null;
+  return m ? {image: m[1], sid: m[2], field: m[3], message: cleanText(first(WARNING, String(text)))} : null;
 };
 
 //  Forum links ("forumlink") on the index and on forum pages.

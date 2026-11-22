@@ -1,0 +1,97 @@
+// The Login Captcha (src/ui/routes.js, route captcha:): the sign-in form
+// again, with the site's picture, styled after the skin's popups/auth.view.
+// Binds metadata.username / password / captchaCode and delivers
+// "captchaSubmit" / "captchaCancel" (not "submit" / "cancel": Movian turns
+// those into its own Submit / Cancel actions).
+#import "skin://popups/common.view"
+
+onEvent(back, deliverEvent($self.eventSink, "captchaCancel"), true, true, true);
+
+#define Row(CAPTION, BODY) {
+  widget(container_x, {
+    tableMode: true;
+    style: "popupRow";
+    widget(label, { caption: CAPTION; align: right; });
+    BODY;
+  });
+}
+
+#define Field(DESC, BIND, PASSWORD, AUTOFOCUS) {
+  widget(container_z, {
+    filterConstraintX: true;
+    widget(quad, { style: "textBackdrop"; });
+    widget(text, {
+      style: "textInput";
+      description: DESC;
+      focusable: true;
+      password: PASSWORD;
+      autofocus: AUTOFOCUS;
+      bind(BIND);
+      onEvent(enter, deliverEvent($self.eventSink, "captchaSubmit"));
+    });
+  });
+}
+
+widget(popup, {
+  aspect: 2;
+  widget(container_z, {
+    filterConstraintX: true;
+    PopupBackdrop();
+
+    widget(container_y, {
+      padding: [$ui.xmargin, 1em];
+      spacing: 2em;
+
+      widget(table, {
+        widget(container_y, {
+          spacing: 0.25em;
+
+          widget(container_x, {
+            tableMode: true;
+            style: "popupRow";
+            widget(icon, {
+              source: "skin://icons/ic_lock_48px.svg";
+              align: center;
+              size: 2em;
+            });
+            widget(container_y, {
+              filterConstraintX: true;
+              widget(label, { align: left; caption: $self.model.metadata.title; });
+              widget(label, { align: left; maxlines: 2; caption: $self.model.metadata.captchaMessage; });
+            });
+          });
+
+          Row("Логин", Field("Логин", $self.model.metadata.username, false, false));
+          Row("Пароль", Field("Пароль", $self.model.metadata.password, true, true));
+
+          // The picture fills the space left of the code and the buttons.
+          widget(container_x, {
+            tableMode: true;
+            style: "popupRow";
+            widget(label, { caption: "Капча"; align: right; });
+            widget(container_x, {
+              filterConstraintX: true;
+              spacing: 1em;
+              widget(image, {
+                height: 6em;
+                align: top;
+                source: $self.model.metadata.captchaImage;
+              });
+              widget(container_y, {
+                filterConstraintX: true;
+                spacing: 1.5em;
+                Field("Код с картинки", $self.model.metadata.captchaCode, false, false);
+                widget(container_x, {
+                  align: center;
+                  spacing: 1em;
+                  popupButton(deliverEvent($self.eventSink, "captchaSubmit"), true, false, "Войти");
+                  popupButton(deliverEvent($self.eventSink, "captchaCancel"), true, false, "Отмена");
+                });
+              });
+            });
+          });
+        });
+      });
+    });
+  });
+});

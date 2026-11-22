@@ -1,0 +1,10 @@
+version: 2
+updates:
+  # The only dependencies: the workflow's actions. mise.toml pins the tools.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    # A fresh release waits a week: fewer compromised versions get in.
+    cooldown:
+      default-days: 7

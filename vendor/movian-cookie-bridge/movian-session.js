@@ -9,42 +9,37 @@
  *   settings.apps.nodes.<settingsGroup>.nodes.browserCookie.value
  *   settings.apps.nodes.<settingsGroup>.nodes.browserUA.value
  *
- * This module owns those two settings and:
- *  - moves the cookie out of the settings tree the moment it arrives: that
- *    tree is readable over unauthenticated STPP (LAN, and web pages through
- *    ws://127.0.0.1 - stpp.c checks no Origin) and is shown on the settings
- *    page. browserCookie keeps a placeholder; the session goes to a plugin
- *    store file (plaintext on disk, like the settings file). A session
- *    left in the tree by an older version is moved on start-up;
- *  - applies the cookies in the plugin's HTTP inspectors, to the profile
- *    domains over https only;
- *  - runs the plugin's session check once per transfer and keeps a status.
- *    A transfer is not a login: only the check says whether the site took it.
+ * This module owns those two settings and hands each cookie + User-Agent
+ * pair to the plugin (onSession), which keeps, checks and applies the
+ * session. It takes the cookie out of the settings tree the moment it
+ * arrives: that tree is readable over unauthenticated STPP (LAN, and web
+ * pages through ws://127.0.0.1 - stpp.c checks no Origin) and is shown on
+ * the settings page, so both items keep a placeholder. A session an
+ * earlier version left in the tree or its store goes to the plugin once.
  *
  * Cookie values are never logged. Known limit: an STPP client that is
  * already subscribed while a transfer happens sees that one write.
- *
- * The site-specific part stays in the plugin: which page proves a login,
- * and how to read the account name from it (see `check`).
  */
 var core = require('./bridge-core');
 
-exports.VERSION = '1.0.0';
+exports.VERSION = '2.0.0';
 
-var STATUS_TEXT = {
-  empty: 'сессия не передана',
-  received: 'сессия получена, проверяется...',
-  rejected: 'сессия не принята сайтом (истекла или недействительна)',
-  challenge: 'требуется проверка Cloudflare в браузере',
-  network_error: 'сетевая ошибка при проверке',
-};
+/*
+ * True when `response` (a movian/http response) is Cloudflare's challenge
+ * itself, by its header or by the interstitial's title; `text` is its body
+ * when the caller already decoded it. Cloudflare injects
+ * /cdn-cgi/challenge-platform/ into ordinary pages, which is no challenge.
+ */
+function challenged(response, text) {
+  var lc = response.headers_lc || {};
+  return lc['cf-mitigated'] === 'challenge' || /<title>Just a moment\.\.\.<\/title>/.test(text === undefined ? String(response) : text);
+}
+exports.challenged = challenged;
 
 /*
  * Reads a session check response. `response` is a movian/http response or
  * null (network failure); `loginName(text)` returns the account name when
  * the page is the logged-in view. HTTP 200 alone proves nothing.
- * Cloudflare injects /cdn-cgi/challenge-platform/ into ordinary pages, so a
- * challenge is only the interstitial itself.
  */
 exports.classify = function (response, loginName) {
   if (!response) return {status: 'network_error'};
@@ -56,9 +51,7 @@ exports.classify = function (response, loginName) {
   }
   var user = loginName(text);
   if (user) return {status: 'authenticated', user: user};
-  var lc = response.headers_lc || {};
-  if (lc['cf-mitigated'] === 'challenge' || /<title>Just a moment\.\.\.<\/title>/.test(text))
-    return {status: 'challenge'};
+  if (challenged(response, text)) return {status: 'challenge'};
   if (!text || response.statuscode >= 400) return {status: 'network_error', detail: 'HTTP ' + response.statuscode};
   return {status: 'rejected'};
 };
@@ -66,67 +59,61 @@ exports.classify = function (response, loginName) {
 /*
  * options:
  *   profile      bridge-core profile id ('rutracker', 'hdrezka', ...)
- *   check        function () -> exports.classify(...) result; fetches a
- *                page with the session applied
- *   hosts        optional list of domains to send the cookies to; default
- *                profile.domains. A profile without domains (HDRezka: any
- *                mirror) sends nothing unless the plugin names its hosts.
+ *   onSession    function (cookieHeader, ua, stored) -> true when the
+ *                plugin took the session. Called with each cookie +
+ *                User-Agent pair that arrived in one transfer; an empty
+ *                pair for "Clear session"; and once, with stored = true, a
+ *                session an earlier version stored, whose copy is then
+ *                dropped. Required: the module keeps no session itself.
+ *   check        optional function () for the "check session" action
  *   group        optional settings group object to add the items to; by
  *                default a new group named after profile.settingsGroup
  *   title, icon, description   for that new settings group
  */
 exports.create = function (options) {
+  var handOver = options.onSession;
+  if (typeof handOver !== 'function') throw new Error('movian-session: onSession is required');
   var profile = core.profile(options.profile);
   var id = profile.settingsGroup;
-  var hosts = options.hosts || profile.domains || [];
   var store = require('movian/store').create(id);
-  var state = {cookie: '', ua: '', status: 'empty', detail: '', user: '', checkPending: false};
   var loaded = false;
   var cookieItem, uaItem;
+  var pair = {cookie: null, ua: null, gen: 0};
 
   function log(msg) {
     console.log('[' + id + '] ' + msg);
   }
 
-  function setStatus(status, detail) {
-    state.status = status;
-    state.detail = detail || '';
-    log('status=' + status + (state.detail ? ' (' + state.detail + ')' : ''));
-  }
-
-  function hostAllowed(url) {
-    var m = /^https:\/\/([^\/:?#]+)/i.exec(String(url || ''));
-    if (!m) return false;
-    for (var i = 0; i < hosts.length; i++) {
-      if (core.domainMatches(m[1], hosts[i])) return true;
-    }
-    return false;
-  }
-
-  function check() {
-    if (!state.cookie) {
-      state.user = '';
-      setStatus('empty');
+  //  The extension writes the cookie and the UA as two STPP SETs. They are
+  //  one pair when the second arrives within PAIR_MS of the first, in
+  //  either order; a half left alone that long is dropped, so a cookie
+  //  never travels with the UA of another transfer. Both items then show a
+  //  placeholder, so sending the same pair again is a change that Movian
+  //  reports.
+  var PAIR_MS = 3000;
+  function offerHalf() {
+    if (pair.cookie === null || pair.ua === null) {
+      var gen = pair.gen;
+      setTimeout(function () {
+        if (pair.gen !== gen) return;
+        log('incomplete transfer (' + (pair.cookie === null ? 'no cookie' : 'no UA') + '), ignored');
+        pair = {cookie: null, ua: null, gen: gen + 1};
+      }, PAIR_MS);
       return;
     }
-    var res = options.check();
-    state.user = res.user || '';
-    setStatus(res.status, res.user || res.detail);
+    var cookie = pair.cookie, ua = pair.ua, gen = pair.gen + 1;
+    pair = {cookie: null, ua: null, gen: gen};
+    //  Out of the settings callback: the plugin checks the session online.
+    //  A "Clear" (or a newer transfer) before then moves gen on: drop this one.
+    setTimeout(function () {
+      if (pair.gen !== gen) return;
+      uaItem.value = 'сохранено вне настроек (длина: ' + ua.length + ')';
+      handOver(cookie, ua, false);
+    }, 0);
   }
 
-  //  One check per transfer: cookie and UA arrive as two STPP SETs.
-  function scheduleCheck() {
-    if (state.checkPending) return;
-    state.checkPending = true;
-    setTimeout(function () {
-      state.checkPending = false;
-      try {
-        check();
-      }
-      catch (err) {
-        setStatus('error', String(err));
-      }
-    }, 300);
+  function dropHalves() {
+    pair = {cookie: null, ua: null, gen: pair.gen + 1};
   }
 
   //  browserCookie values: a Cookie header always contains '=', the
@@ -134,30 +121,25 @@ exports.create = function (options) {
   function onCookie(v) {
     if (v.indexOf('=') > 0) {
       var count = core.parseCookieHeader(v).length;
-      state.cookie = v;
-      store.cookie = v;
-      log('cookie updated, entries=' + count);
+      pair.cookie = v;
+      log('cookie received, entries=' + count);
       cookieItem.value = 'сохранено вне настроек (cookies: ' + count + ')';
-      setStatus('received');
-      scheduleCheck();
+      offerHalf();
     }
     else if (!v) {
-      state.cookie = '';
-      state.user = '';
-      store.cookie = '';
-      setStatus('empty');
+      dropHalves();
+      handOver('', '', false);
     }
   }
 
   function clear() {
-    state.cookie = '';
-    state.ua = '';
-    state.user = '';
-    //  store.js proxies have no delete trap: overwrite instead.
-    store.cookie = '';
+    //  The item writes below are not a transfer.
+    loaded = false;
     cookieItem.value = '';
     uaItem.value = '';
-    setStatus('empty', 'cleared');
+    loaded = true;
+    dropHalves();
+    handOver('', '', false);
     try {
       require('native/popup').notify('Сессия Cookie Bridge очищена');
     }
@@ -174,55 +156,25 @@ exports.create = function (options) {
     if (loaded) onCookie(v || '');
   });
   uaItem = group.createString('browserUA', 'browserUA (заполняется расширением)', '', function (v) {
-    state.ua = v || '';
-    if (!loaded) return;
-    log('ua updated, len=' + state.ua.length);
-    if (state.cookie) {
-      setStatus('received');
-      scheduleCheck();
-    }
+    //  '' is the placeholder being reset or the second half of "Clear
+    //  session", which the cookie already announced.
+    if (!loaded || !v || v.indexOf('сохранено вне настроек') === 0) return;
+    pair.ua = v;
+    log('ua received, len=' + v.length);
+    offerHalf();
   });
+  //  A session stored by an earlier version (in the store, or in the 0.8.0
+  //  settings item) goes to the plugin once.
+  var stored = String(cookieItem.value || '').indexOf('=') > 0 ? String(cookieItem.value) : String(store.cookie || '');
+  if (stored && handOver(stored, String(uaItem.value || ''), true)) {
+    //  store.js proxies have no delete trap: overwrite instead.
+    store.cookie = '';
+    cookieItem.value = '';
+    uaItem.value = '';
+  }
   loaded = true;
-  if (String(cookieItem.value || '').indexOf('=') > 0) {
-    onCookie(String(cookieItem.value));
-  }
-  else if (store.cookie) {
-    state.cookie = store.cookie;
-    setStatus('received');
-    scheduleCheck();
-  }
-  group.createAction('bridgeCheck', 'Проверить сессию Cookie Bridge', scheduleCheck);
+  group.createAction('bridgeCheck', 'Проверить сессию Cookie Bridge', function () {
+    if (options.check) options.check();
+  });
   group.createAction('bridgeClear', 'Очистить сессию Cookie Bridge', clear);
-
-  return {
-    //  For an HTTP inspector callback: adds the session cookies when the
-    //  request goes to a profile domain over https.
-    applyToRequest: function (ctrl) {
-      if (!state.cookie || !ctrl || !hostAllowed(ctrl.url)) return;
-      var pairs = core.parseCookieHeader(state.cookie);
-      for (var i = 0; i < pairs.length; i++) {
-        //  setCookie() merges with the core cookie jar; for the same name
-        //  the value set here wins (http_cookie_append()).
-        ctrl.setCookie(pairs[i].name, pairs[i].value);
-      }
-    },
-    //  The browser's User-Agent ('' when none was sent). cf_clearance is
-    //  bound to it, so inspectors must send exactly this one.
-    userAgent: function () {
-      return state.ua;
-    },
-    active: function () {
-      return !!state.cookie;
-    },
-    status: function () {
-      return state.status;
-    },
-    text: function () {
-      if (state.status === 'authenticated') return 'Cookie Bridge: авторизован как ' + state.user;
-      if (state.status === 'error') return 'Cookie Bridge: ошибка ' + state.detail;
-      return 'Cookie Bridge: ' + (STATUS_TEXT[state.status] || state.status);
-    },
-    check: scheduleCheck,
-    clear: clear,
-  };
 };

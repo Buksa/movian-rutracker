@@ -31,9 +31,11 @@ var TOS = 'Плагин предназначен исключительно дл
   'Принимаете ли вы эти условия использования?';
 
 /*
- * ctx: {id, title, path, logo, config, catalog, auth, client, bridge}
- *   config  - live settings values (see src/ui/settings.js)
- *   bridge  - {status, user, text()} of the Cookie Bridge session
+ * ctx: {id, title, path, logo, config, catalog, auth, client, session,
+ *       clearance}
+ *   config    - live settings values (see src/ui/settings.js)
+ *   session   - the Session Coordinator (src/bridge/session.js)
+ *   clearance - the Clearance (src/bridge/clearance.js)
  */
 exports.register = function (ctx) {
   var PREFIX = ctx.id;
@@ -42,6 +44,7 @@ exports.register = function (ctx) {
   var config = ctx.config;
   var catalog = ctx.catalog;
   var client = ctx.client;
+  var clearance = ctx.clearance;
   var icon = {
     background: ctx.path + 'src/back.jpg',
     arrow: ctx.path + 'src/arrow.png',
@@ -85,8 +88,90 @@ exports.register = function (ctx) {
     });
   }
 
+  var ELSEWHERE = 'Обновите проверку Cloudflare или передайте сессию через Cookie Bridge.';
+  //  Password Login results that end the login page with a message.
+  var LOGIN_ERRORS = {
+    network: function () {
+      return 'Вход не выполнен: сетевая ошибка';
+    },
+    cancelled: function () {
+      return 'Вход отменён: сессию забыли или очистили во время проверки, либо начат другой вход. Пароль не запрашивается снова.';
+    },
+    challenge: function () {
+      return 'Вход не выполнен: сайт требует проверку Cloudflare. ' + ELSEWHERE;
+    },
+    insecure: function () {
+      return 'Вход по паролю возможен только по https: выберите https-домен в настройках плагина.';
+    },
+    unverified: function (r) {
+      return 'Пароль принят, но вход не подтверждён: ' + (r.check === 'challenge' ?
+        'Cloudflare не пускает на форум. ' + ELSEWHERE : ctx.session.statusText(r.check) + '.') +
+        ' Прежняя сессия не изменилась.';
+    },
+  };
+
+  var CLEARANCE_ERRORS = {
+    cancelled: function () {
+      return 'Окно проверки закрыто до получения Cloudflare clearance. Вход по паролю не запускался.';
+    },
+    empty: function () {
+      return 'Movian не смогла прочитать cf_clearance из CEF. Повторите попытку или используйте Cookie Bridge.';
+    },
+    unsupported: function () {
+      return 'Cookie-aware CEF недоступен в этой сборке. Передайте сессию через Cookie Bridge.';
+    },
+    neterror: function () {
+      return 'Не удалось открыть CEF или прочитать cookies. Повторите попытку или используйте Cookie Bridge.';
+    },
+    persistfailed: function () {
+      return 'Movian Go не смогла сохранить Cloudflare clearance с подтверждённым сроком действия. Повторите попытку или используйте Cookie Bridge.';
+    },
+  };
+
+  function safeResumeUrl(url) {
+    return url === PREFIX + ':bookmarks' ||
+      new RegExp('^' + PREFIX + ':(search|forum|topic):').test(String(url || ''));
+  }
   function redirectTo(p, state, stateParams) {
     return p.redirect(PREFIX + ':' + state + ':' + encodeURIComponent(JSON.stringify(stateParams)));
+  }
+
+  //  A page that got no response at all is said so, not shown as an empty one.
+  function networkWarning(p) {
+    p.appendItem('', 'separator', {
+      title: new RichText(coloredStr('нет связи с RuTracker: откройте страницу снова, чтобы повторить', red)),
+    });
+  }
+
+  /*
+   * A page list loaded page by page: url is the first page, size the
+   * entries per page, fetch(url, n) loads page n (counted from the url's
+   * start=), render(result, n) adds its
+   * items and returns false to stop, resume(start) is the route back to the
+   * page whose start= is given ('' for none). A Clearance Refresh that
+   * brings back a guest page means the Session is gone: Password Login,
+   * then back to that page.
+   */
+  function paged(p, url, size, fetch, render, resume) {
+    var start = /[?&]start=([0-9]+)/.exec(url);
+    var n = start ? Math.floor(start[1] / size) : 0;
+    function loader() {
+      p.loading = true;
+      var result = fetch(url, n + 1);
+      p.loading = false;
+      //  No response is not a guest page: the warning shows, not Password Login.
+      if (result.clearanceRefreshed && !result.user && !result.network) {
+        var at = /[?&]start=([^&]+)/.exec(url);
+        redirectTo(p, 'login', {showAuth: false, resumeUrl: resume(at ? at[1] : '')});
+        return p.haveMore(false);
+      }
+      n++;
+      if (render(result, n) === false || !result.next) return p.haveMore(false);
+      url = result.next;
+      return p.haveMore(true);
+    }
+    loader();
+    p.asyncPaginator = loader;
   }
 
   /* ---- start ---------------------------------------------------------- */
@@ -104,32 +189,43 @@ exports.register = function (ctx) {
     p.loading = true;
     setup(p, TTL);
     p.type = 'directory';
-    p.model.contents = 'list';
-    var b = ctx.bridge;
-    if (b.active() || /^(authenticated|rejected|challenge|network_error)$/.test(b.status())) {
+    var s = ctx.session;
+    s.onOpen();
+    var index = catalog.index();
+    //  Read after the requests: a Forget during either has dropped the Clearance.
+    var hasClearance = clearance && clearance.active();
+    p.loading = false;
+    if (s.active()) {
       p.appendItem('', 'separator', {
-        title: new RichText(coloredStr(b.text(), b.status() === 'authenticated' ? green : orange)),
+        title: new RichText(coloredStr(s.text(), s.status() === 'authenticated' ? green : orange)),
       });
     }
-    var index = catalog.index();
-    p.loading = false;
-    if (!index.user) {
-      if (config.startAuth) {
+    if (s.status() === 'network_error' || index.network) networkWarning(p);
+    //  The account of the Active Session; without one, what the site shows
+    //  for the cookies Movian's own jar sends (an earlier login).
+    var signedIn = s.active() || !!index.user;
+    var user = s.user() || index.user || '?';
+    var passwordLogin = PREFIX + ':login:' + encodeURIComponent(JSON.stringify({showAuth: false}));
+    if (!signedIn) {
+      if (config.startAuth && !hasClearance) {
         redirectTo(p, 'login', {showAuth: false});
         return;
       }
-      p.appendItem(PREFIX + ':login:' + encodeURIComponent(JSON.stringify({showAuth: false})), 'directory', {
+      p.appendItem(passwordLogin, 'directory', {
         title: new RichText(coloredStr('Войти на ' + TTL, red)),
         icon: icon.logo,
       });
     }
     else {
-      p.appendItem(PREFIX + ':logout:true:null:null', 'directory', {
-        title: new RichText(coloredStr('Пользователь [ ' + index.user + ' ]', gray)),
-        icon: icon.logo,
+      //  A plain label: RuTracker never ends a session on logout (#3), so
+      //  there is no action to offer here. Forget is the way out.
+      p.appendItem('', 'separator', {
+        title: new RichText(coloredStr('Пользователь [ ' + user + ' ]' + (s.active() ? '' : ' (сессия Movian)'), gray)),
       });
     }
     p.appendItem(PREFIX + ':search:0:', 'search', {title: 'Поиск на ' + client.baseUrl});
+    //  Needs a signed-in index page: a checked Session with
+    //  a failed index is not enough, the bookmarks would load over no network.
     if (index.user) {
       p.appendItem(PREFIX + ':bookmarks', 'directory', {
         title: new RichText('Избранное'),
@@ -142,10 +238,27 @@ exports.register = function (ctx) {
         icon: icon.folder,
       });
     });
-    if (index.user) {
-      p.appendItem(PREFIX + ':logout:true:null:null', 'directory', {
-        title: new RichText(coloredStr('Выйти из аккаунта ' + index.user, red)),
+    if (signedIn || hasClearance) {
+      //  What stays valid is said in the item and in the result (see :forget).
+      var sessionKept = s.active() || signedIn;
+      var forgetTitle = !sessionKept ? 'Забыть Cloudflare clearance' :
+        (hasClearance ? 'Забыть сессию и Cloudflare clearance' : 'Забыть сессию') +
+        ' (на сайте она останется действующей' + (s.source() === 'bridge' ? ', и в вашем браузере тоже' : '') + ')';
+      p.appendItem(PREFIX + ':forget', 'directory', {
+        title: new RichText(coloredStr(forgetTitle, gray)),
         icon: icon.exit,
+      });
+    }
+    if (signedIn) {
+      p.appendItem(passwordLogin, 'directory', {
+        title: new RichText(coloredStr('Войти по паролю (сменить способ входа)', gray)),
+        icon: icon.logo,
+      });
+    }
+    if (clearance.available()) {
+      p.appendItem(PREFIX + ':refreshclearance', 'directory', {
+        title: new RichText(coloredStr('Обновить проверку Cloudflare', gray)),
+        icon: icon.logo,
       });
     }
   });
@@ -160,7 +273,8 @@ exports.register = function (ctx) {
       p.model.contents = 'list';
       p.entries = 0;
       p.loading = true;
-      var result = catalog.search(client.url.search(query));
+      //  Movian's global search: no Cloudflare window over the user's search.
+      var result = catalog.search(client.url.search(query), true);
       p.loading = false;
       if (!result.loaded) {
         p.appendItem('', 'separator', {title: 'Поиск не выполнен: сайт не вернул результаты (сеть или проверка Cloudflare)'});
@@ -182,46 +296,42 @@ exports.register = function (ctx) {
 
   //  The forum id has no colon; the query may ("Star Trek: Discovery").
   new page.Route(PREFIX + ':search:([^:]*):(.*)', function (p, forumId, query) {
+    var routeForumId = forumId;
     if (!forumId || (forumId === '0'))
       forumId = '-1';
-    var url = client.url.search(query, forumId);
-    var pageNum = 0;
     var topicCount = 0;
     p.metadata.background = icon.background;
     p.metadata.title = new RichText(TTL + ': ' + query);
     p.type = 'directory';
     p.model.contents = 'list';
     p.entries = 0;
-    loader();
-    p.asyncPaginator = loader;
-    function loader() {
-      p.loading = true;
-      var result = catalog.search(url);
-      p.loading = false;
+    //  A search resumes at its first page: the pager links' search_id
+    //  belongs to the old Session.
+    paged(p, client.url.search(query, forumId), 50, function (url) {
+      return catalog.search(url);
+    }, function (result, n) {
       if (!topicCount && !result.topics.length) {
         nothingFound(result.loaded);
-        return p.haveMore(false);
+        return false;
       }
       if (!result.loaded) {
         p.appendItem('', 'separator', {title: 'Следующая страница не загружена: сайт не вернул страницу'});
-        return p.haveMore(false);
+        return false;
       }
       if (result.topics.length) {
-        p.appendItem('', 'separator', {title: new RichText('Темы ' + colorStr(pageNum + 1, gray))});
+        p.appendItem('', 'separator', {title: new RichText('Темы ' + colorStr(n, gray))});
       }
       result.topics.forEach(function (row) {
         appendTopic(p, row, ++topicCount, 'Добавлен: ');
         p.entries++;
       });
-      if (!result.next) return p.haveMore(false);
-      url = result.next;
-      pageNum++;
-      return p.haveMore(true);
-    }
+    }, function () {
+      return PREFIX + ':search:' + routeForumId + ':' + query;
+    });
     //  The site matches whole words: "dis" finds nothing, "dis*" finds
     //  "Discovery". Offer that instead of an empty page.
     function nothingFound(loaded) {
-      if (!loaded) return p.error('Поиск не выполнен: сайт не вернул результаты (сеть или проверка Cloudflare)');
+      if (!loaded) return p.error('Поиск не выполнен: сайт не вернул результаты (сеть или проверка Cloudflare). Если CEF недоступен, передайте сессию через Cookie Bridge.');
       p.appendItem('', 'separator', {title: 'Ничего не найдено'});
       if (/[^\s*]$/.test(query))
         p.appendItem(PREFIX + ':search:' + forumId + ':' + query + '*', 'directory', {
@@ -234,44 +344,34 @@ exports.register = function (ctx) {
   /* ---- lists ---------------------------------------------------------- */
 
   new page.Route(PREFIX + ':bookmarks', function (p) {
-    var url = client.url.bookmarks;
-    var pageNum = 0;
     var topicCount = 0;
     setup(p, 'Избранное');
     p.type = 'directory';
     p.model.contents = 'list';
     p.entries = 0;
-    loader();
-    p.asyncPaginator = loader;
-    function loader() {
-      p.loading = true;
-      var result = catalog.bookmarks(url);
-      p.loading = false;
-      pageNum++;
+    paged(p, client.url.bookmarks, 50, catalog.bookmarks, function (result, n) {
       if (!result.loaded) {
-        if (pageNum === 1) p.error('Закладки не загружены: сайт не вернул страницу закладок (сеть, Cloudflare или вход не выполнен)');
+        if (n === 1) p.error('Закладки не загружены: сайт не вернул страницу закладок (сеть, Cloudflare или вход не выполнен)');
         else p.appendItem('', 'separator', {title: 'Следующая страница не загружена: сайт не вернул страницу'});
-        return p.haveMore(false);
+        return false;
       }
       if (result.topics.length) {
-        p.appendItem('', 'separator', {title: new RichText('Темы ' + colorStr(pageNum, gray))});
+        p.appendItem('', 'separator', {title: new RichText('Темы ' + colorStr(n, gray))});
       }
-      else if (pageNum === 1) {
+      else if (n === 1) {
         p.appendItem('', 'separator', {title: 'Закладок нет'});
       }
       result.topics.forEach(function (row) {
         appendTopic(p, row, ++topicCount, 'Посл. сообщение: ');
         p.entries++;
       });
-      if (!result.next) return p.haveMore(false);
-      url = result.next;
-      return p.haveMore(true);
-    }
+    }, function () {
+      return PREFIX + ':bookmarks';
+    });
   });
 
   new page.Route(PREFIX + ':forum:(.*):(.*):(.*)', function (p, forumId, forumPage, forumTitle) {
-    var url = client.url.subforum(forumId);
-    var pageNum = 0;
+    var pageStart = parseInt(forumPage, 10) || 0;
     var itemCount = 0;
     var topicCount = 0;
     var title = decodeURIComponent(forumTitle);
@@ -279,14 +379,9 @@ exports.register = function (ctx) {
     p.type = 'directory';
     p.model.contents = 'list';
     p.entries = 0;
-    loader();
-    p.asyncPaginator = loader;
-    function loader() {
-      p.loading = true;
-      var result = catalog.forum(url);
-      p.loading = false;
-      pageNum++;
-      if (pageNum === 1) {
+    paged(p, client.url.subforum(forumId) + (pageStart ? '&start=' + pageStart : ''), 50, catalog.forum, function (result, n) {
+      if (result.network) return networkWarning(p);
+      if (n === 1) {
         p.appendItem(PREFIX + ':search:' + forumId + ':', 'search', {title: 'Поиск в разделе ' + title});
         if (result.subforums.length) p.appendItem('', 'separator', {title: 'Форумы'});
         result.subforums.forEach(function (f) {
@@ -298,30 +393,26 @@ exports.register = function (ctx) {
         });
       }
       if (result.topics.length) {
-        p.appendItem('', 'separator', {title: new RichText('Темы ' + colorStr(pageNum, gray))});
+        p.appendItem('', 'separator', {title: new RichText('Темы ' + colorStr(n, gray))});
       }
       result.topics.forEach(function (row) {
         appendTopic(p, row, ++topicCount, 'Посл. сообщение: ');
         p.entries++;
       });
-      if (!result.next) return p.haveMore(false);
-      url = result.next;
-      return p.haveMore(true);
-    }
+    }, function (start) {
+      return PREFIX + ':forum:' + forumId + ':' + (start || forumPage) + ':' + forumTitle;
+    });
   });
 
   /* ---- topic ---------------------------------------------------------- */
 
-  new page.Route(PREFIX + ':topic:(.*):(.*)', function (p, topicId, topicTitle) {
-    var url = client.url.topic(topicId);
+  new page.Route(PREFIX + ':topic:([^:]*):([^:]*)(?::([0-9]+))?', function (p, topicId, topicTitle, topicStart) {
+    var pageStart = parseInt(topicStart, 10) || 0;
     var title = decodeURIComponent(topicTitle);
-    var pageNum = 0;
     setup(p);
     p.metadata.title = new RichText(title);
     p.type = 'directory';
     p.model.contents = 'list';
-    loader();
-    p.asyncPaginator = loader;
 
     //  The release item for the torrent or magnet link of the first post;
     //  a passive item with the post when that link is missing.
@@ -346,7 +437,10 @@ exports.register = function (ctx) {
       }
     }
 
+    //  Core opens a plain link itself, without the Core-held clearance; the
+    //  torrent route fetches through the plugin client instead.
     function appendLink(url, name) {
+      if (/^https:\/\//i.test(url) && /dl\.php/.test(url)) url = PREFIX + ':torrent:' + encodeURIComponent(url);
       p.appendItem(url, config.list, {
         title: name,
         icon: icon.icon,
@@ -355,12 +449,12 @@ exports.register = function (ctx) {
       });
     }
 
-    function loader() {
-      p.loading = true;
-      var t = catalog.topic(url, pageNum === 0);
-      p.loading = false;
-      pageNum++;
-      if (pageNum === 1) {
+    //  A topic page holds 30 posts.
+    paged(p, client.url.topic(topicId) + (pageStart ? '&start=' + pageStart : ''), 30, function (url, n) {
+      return catalog.topic(url, n === 1);
+    }, function (t, n) {
+      if (t.network) return networkWarning(p);
+      if (n === 1) {
         p.appendItem('', 'separator', {title: 'Торренты:'});
         appendRelease(t.post, 'torrent');
         if (t.download) appendLink(t.download, 'Торрент-ссылка');
@@ -388,7 +482,7 @@ exports.register = function (ctx) {
         }
       }
       if (t.comments.length) {
-        p.appendItem('', 'separator', {title: new RichText('Комментарии ' + colorStr(pageNum, gray))});
+        p.appendItem('', 'separator', {title: new RichText('Комментарии ' + colorStr(n, gray))});
       }
       t.comments.forEach(function (text) {
         p.appendPassiveItem(config.list, null, {
@@ -398,10 +492,9 @@ exports.register = function (ctx) {
           description: new RichText(text),
         });
       });
-      if (!t.next) return p.haveMore(false);
-      url = t.next;
-      return p.haveMore(true);
-    }
+    }, function (start) {
+      return PREFIX + ':topic:' + topicId + ':' + topicTitle + (start ? ':' + start : topicStart ? ':' + topicStart : '');
+    });
   });
 
   new page.Route(PREFIX + ':torrent:(.*)', function (p, dlHref) {
@@ -415,99 +508,121 @@ exports.register = function (ctx) {
     p.redirect('torrent:browse:data:application/x-bittorrent;base64,' + Duktape.enc('base64', res.bytes));
   });
 
-  /* ---- legacy login --------------------------------------------------- */
+  /* ---- Cloudflare clearance (Movian Go) ------------------------------- */
+
+  new page.Route(PREFIX + ':refreshclearance', function (p) {
+    setup(p, 'Проверка Cloudflare');
+    var res = clearance.refresh({title: 'Cloudflare: решите challenge и закройте окно', force: true});
+    if (res.status === 'ok') {
+      p.redirect(PREFIX + ':start');
+      return;
+    }
+    p.error(CLEARANCE_ERRORS[res.status] ? CLEARANCE_ERRORS[res.status]() : CLEARANCE_ERRORS.empty());
+  });
+
+  /* ---- Password Login ------------------------------------------------- */
 
   new page.Route(PREFIX + ':login:(.*)', function (p, options) {
     setup(p, 'Вход на ' + TTL);
     options = JSON.parse(decodeURIComponent(options));
-    while (1) {
+    //  After a Forget the first sign-in always shows Movian's login dialog,
+    //  even with saved credentials: Movian would take them silently (#22).
+    if (ctx.session.forgotten()) options.showAuth = true;
+    if (!clearance.active() && clearance.available()) {
+      var acquired = clearance.refresh({title: 'Cloudflare: ждите закрытия окна после получения clearance'});
+      if (acquired.status !== 'ok') {
+        p.error(CLEARANCE_ERRORS[acquired.status] ? CLEARANCE_ERRORS[acquired.status]() :
+          CLEARANCE_ERRORS.empty());
+        return;
+      }
+    }
+    for (;;) {
       var credentials = popup.getAuthCredentials(TTL + ' (' + client.baseUrl + ')', 'Требуется авторизация, введите логин и пароль', options.showAuth);
       if (credentials.rejected) return;
       if (credentials) {
         p.loading = true;
-        var result = ctx.auth.login(credentials.username, credentials.password, options.captchaSid ?
-          {sid: options.captchaSid, field: options.capCodeName, value: options.captchaValue} : null);
+        var result = ctx.auth.login(credentials.username, credentials.password);
         p.loading = false;
-        if (result.status === 'network' || result.status === 'challenge') {
-          p.error(result.status === 'network' ? 'Вход не выполнен: сетевая ошибка' :
-            'Вход не выполнен: сайт требует проверку Cloudflare. Войдите в браузере и передайте сессию через Cookie Bridge.');
+        if (LOGIN_ERRORS[result.status]) {
+          p.error(LOGIN_ERRORS[result.status](result));
           return;
         }
         if (result.status === 'captcha') {
-          p.redirect(PREFIX + ':captcha:' + encodeURIComponent(result.captcha.image) + ':' + result.captcha.sid + ':' + result.captcha.field);
+          redirectTo(p, 'captcha', {captcha: result.captcha, username: credentials.username, resumeUrl: options.resumeUrl || ''});
           return;
         }
         options.showAuth = result.status === 'failed';
-        if (!options.showAuth) {
-          //  Bridge cookies would override the new login (inspector cookies
-          //  beat the core cookie jar for the same name).
-          if (ctx.bridge.active()) ctx.bridge.clear();
-          break;
-        }
+        if (!options.showAuth) break;
       }
       options.showAuth = true;
     }
-    if (options.topicId && options.topicId !== 'null') {
-      p.redirect(PREFIX + ':topic:' + options.topicId + ':' + options.topicTitle);
+    p.redirect(safeResumeUrl(options.resumeUrl) ? options.resumeUrl : PREFIX + ':start');
+  });
+
+  //  The Server Logout was removed (#3): RuTracker keeps the session valid.
+  //  The route stays for old bookmarks, and posts nothing.
+  new page.Route(PREFIX + ':logout', function (p) {
+    p.redirect(PREFIX + ':start');
+  });
+
+  //  Built-in Browser Login was removed (#22): its route stays for old
+  //  bookmarks, and opens no window.
+  new page.Route(PREFIX + ':browserlogin', function (p) {
+    p.redirect(PREFIX + ':start');
+  });
+
+  //  "Forget": the Active Session goes, and the Core Jar's login is hidden
+  //  until a new one is Active (session.js). The browser's cf_clearance and
+  //  the Core record of the clearance are deleted; the browser's session
+  //  cookies are not (no Session comes from the browser any more). RuTracker
+  //  keeps the session valid, and the result says so.
+  new page.Route(PREFIX + ':forget', function (p) {
+    setup(p, 'Забыть сессию ' + TTL);
+    var source = ctx.session.source();
+    ctx.session.forget();
+    clearance.forget();
+    popup.notify('Сессия забыта. На сайте RuTracker она остаётся действующей' +
+      (source === 'bridge' ? ', и в вашем браузере тоже' : '') + '.', 5);
+    p.redirect(PREFIX + ':start');
+  });
+
+  //  The Login Captcha in views/login-captcha.view: the sign-in form again,
+  //  with the site's picture. The view binds metadata.username, password
+  //  and captchaCode and delivers "captchaSubmit" or "captchaCancel" (Movian
+  //  turns "submit" / "cancel" into its own actions). The password never
+  //  goes into a route: the form signs in itself.
+  new page.Route(PREFIX + ':captcha:(.*)', function (p, state) {
+    state = JSON.parse(decodeURIComponent(state));
+    setup(p, 'Вход на ' + TTL);
+    p.type = 'raw';
+    p.metadata.glwview = ctx.path + 'views/login-captcha.view';
+    p.metadata.username = state.username || '';
+    function ask(captcha) {
+      state.captcha = captcha;
+      p.metadata.captchaImage = 'https://' + captcha.image;
+      p.metadata.captchaMessage = captcha.message;
+      p.metadata.password = '';
+      p.metadata.captchaCode = '';
     }
-    else p.redirect(PREFIX + ':start');
-  });
-
-  new page.Route(PREFIX + ':logout:(.*):(.*):(.*)', function (p, showAuth, redirectTopicId, redirectTopicTitle) {
-    setup(p, 'Выход из ' + TTL);
-    //  A bridged session belongs to the user's browser: drop it here first,
-    //  so the logout request carries only the plugin's own session and the
-    //  browser stays logged in.
-    if (ctx.bridge.active()) ctx.bridge.clear();
-    ctx.auth.logout();
-    p.loading = false;
-    if (config.startAuth)
-      redirectTo(p, 'login', {
-        showAuth: showAuth === 'true',
-        topicId: redirectTopicId,
-        topicTitle: redirectTopicTitle,
-      });
-    else
-      p.redirect(PREFIX + ':start');
-  });
-
-  new page.Route(PREFIX + ':captchalogin:(.*):(.*):(.*)', function (p, image, capSid, capCodeName) {
-    image = decodeURIComponent(image);
-    if (!/^https?:\/\//.test(image)) image = 'https://' + image;
-    setup(p, 'Ввод капчи для входа на ' + TTL);
-    p.type = 'directory';
-    p.model.contents = 'list';
-    p.appendItem(PREFIX + ':start', 'video', {
-      title: new RichText('Капча'),
-      icon: image,
-      backdrops: [{url: image}],
-      description: new RichText('Введите капчу с картинки'),
+    ask(state.captcha);
+    p.onEvent('captchaSubmit', function () {
+      var username = String(p.metadata.username || '');
+      var password = String(p.metadata.password || '');
+      var code = String(p.metadata.captchaCode || '');
+      if (!username || !password || !code) return;
+      //  An error page keeps the metadata, so the password must not stay in it.
+      p.metadata.password = '';
+      p.loading = true;
+      var result = ctx.auth.login(username, password, {sid: state.captcha.sid, field: state.captcha.field, value: code});
+      p.loading = false;
+      if (result.status === 'captcha') return ask(result.captcha);
+      if (LOGIN_ERRORS[result.status]) return p.error(LOGIN_ERRORS[result.status](result));
+      if (result.status === 'failed') return redirectTo(p, 'login', {showAuth: true, resumeUrl: state.resumeUrl});
+      p.redirect(safeResumeUrl(state.resumeUrl) ? state.resumeUrl : PREFIX + ':start');
     });
-    var captchaValue = popup.textDialog('Введите капчу с картинки', true);
-    if (captchaValue && !captchaValue.rejected && captchaValue.input) {
-      redirectTo(p, 'login', {
-        showAuth: true,
-        captchaSid: capSid,
-        captchaValue: captchaValue.input,
-        capCodeName: capCodeName,
-      });
-    }
-    else {
-      redirectTo(p, 'login', {showAuth: true});
-    }
-  });
-
-  new page.Route(PREFIX + ':captcha:(.*):(.*):(.*)', function (p, image, capSid, capCodeName) {
-    image = decodeURIComponent(image);
-    if (!/^https?:\/\//.test(image)) image = 'https://' + image;
-    setup(p, 'Ввод капчи для входа на ' + TTL);
-    p.type = 'directory';
-    p.model.contents = 'list';
-    p.appendItem(PREFIX + ':captchalogin:' + image + ':' + capSid + ':' + capCodeName, 'video', {
-      title: new RichText('Нажмите, чтобы ввести капчу'),
-      icon: image,
-      backdrops: [{url: image}],
-      description: new RichText('Запомните капчу с картинки'),
+    p.onEvent('captchaCancel', function () {
+      p.metadata.password = '';
+      redirectTo(p, 'login', {showAuth: true, resumeUrl: state.resumeUrl});
     });
   });
 
