@@ -182,7 +182,7 @@ function loadPlugin(opts) {
         cookieSites: {},
         popup: Object.assign({ credentials: [], text: [], message: true }, opts.popup || {}),
         server: opts.server || function () { return { status: 404, body: '' }; },
-        storagePath: '/fake/storage/plugins/RuTracker.org'
+        storagePath: '/fake/storage/plugins/rutracker'
     };
 
     function log(kind) {

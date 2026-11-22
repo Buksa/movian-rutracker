@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Movian Cookie Bridge",
   "description": "Copies browser cookies/User-Agent into Movian (HDRezka and RuTracker profiles) and captures recent request headers.",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "permissions": [
     "cookies",
     "storage",

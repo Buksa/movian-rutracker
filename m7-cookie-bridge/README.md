@@ -2,7 +2,7 @@
 
 Компонент Cookie Bridge: перенос сессии браузера (cookies + User-Agent) в
 Movian M7, чтобы плагин работал за Cloudflare без WebView. Сам плагин
-`rutracker` 0.9.0 лежит в корне репозитория (`plugin.json`, `main.js`, `src/`,
+`rutracker` 0.10.0 лежит в корне репозитория (`plugin.json`, `main.js`, `src/`,
 `vendor/`).
 
 **Начать отсюда:** `README-M7-COOKIE-BRIDGE.md` — устройство, установка,
@@ -12,7 +12,7 @@ Movian M7, чтобы плагин работал за Cloudflare без WebView
 | --- | --- |
 | `README-M7-COOKIE-BRIDGE.md` | Основной документ |
 | `CHANGELOG.md` | История плагина и расширения |
-| `extension/` | Расширение Chrome/Brave 0.4.0 (MV3); `lib/bridge-core.js` — каноническое ядро Bridge |
+| `extension/` | Расширение Chrome/Brave 0.5.0 (MV3); `lib/bridge-core.js` — каноническое ядро Bridge |
 | `tools/orca-session-push.js` | Перенос сессии из встроенного браузера Orca |
 | `tools/package.sh` | Сборка `dist/` (ZIP плагина и расширения; `dist/` в `.gitignore`) |
 | `../tools/live/` | Живая проверка в Movian M7: запуск своего экземпляра, маршруты и страница по STPP, поиск утечек, остановка |
