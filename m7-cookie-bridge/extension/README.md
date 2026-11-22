@@ -1,4 +1,4 @@
-# Movian Cookie Bridge (extension) 0.4.0
+# Movian Cookie Bridge (extension) 0.5.0
 
 Unpacked Chrome/Brave extension (Manifest V3) that copies a site session —
 cookies and User-Agent — from the browser into a Movian plugin over STPP.

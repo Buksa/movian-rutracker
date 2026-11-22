@@ -261,7 +261,7 @@ xdotool mousemove 640 400; for i in $(seq 1 40); do xdotool click 5; done   # sc
 6. "Забыть сессию" → guest page. Click "Войти на RuTracker.org" again: the
    login dialog must show (no silent sign-in, #22), even with the password
    saved; type it and sign in.
-8. Leak scan is advisory. Keep the profile for restart/session tests; after
+7. Leak scan is advisory. Keep the profile for restart/session tests; after
    those are complete, use `mgo-stop.sh --wipe` for explicit cleanup.
 
 What to expect from RuTracker, as observed: its logout does not end the

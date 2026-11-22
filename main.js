@@ -16,7 +16,7 @@
  *  You should have received a copy of the GNU General Public License
  *  along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
-// ver. 0.9.0 (upstream base: 0.7.7 by Wain / fix by kovalDN)
+// ver. 0.10.0 (upstream base: 0.7.7 by Wain / fix by kovalDN)
 //
 //  Entry point: wires the layers together. Each module says what it owns:
 //    src/ui/settings.js   settings page        src/ui/routes.js    pages
