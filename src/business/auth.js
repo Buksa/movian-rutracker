@@ -21,9 +21,12 @@ exports.create = function (client, parser, session) {
         fields['cap_sid'] = captcha.sid;
         fields[captcha.field] = captcha.value;
       }
-      var started = session.generation();
+      //  Its start among sign-ins: one submitted during the POST wins.
+      var ticket = session.ticket();
       var res = client.login(fields);
       if (!res) return {status: 'network'};
+      //  The answer's login is in the Core Jar now, whatever comes of it.
+      var jarWrite = /(^|;\s*)bb_session=/.test(res.cookie || '') ? session.untrustJar() : 0;
       if (res.challenge) return {status: 'challenge'};
       var asked = parser.captcha(res.text);
       if (asked) return {status: 'captcha', captcha: asked};
@@ -31,9 +34,7 @@ exports.create = function (client, parser, session) {
       //  follow it); the form again, or any other page, is not a login.
       var redirected = res.status >= 300 && res.status < 400;
       if (!redirected || parser.loginFailed(res.text)) return {status: 'failed'};
-      //  A Forget or Clear during the POST: its answer is not wanted any more.
-      if (session.generation() !== started) return {status: 'cancelled'};
-      var check = session.submit({source: 'password', host: client.host, cookie: res.cookie, ua: res.clearance ? res.clearance.ua : client.defaultUA});
+      var check = session.submit({source: 'password', host: client.host, cookie: res.cookie, ua: res.clearance ? res.clearance.ua : client.defaultUA, jarWrite: jarWrite}, ticket);
       //  A Forget, Clear or newer sign-in meanwhile: this login is not wanted any more.
       if (check.status === 'cancelled') return {status: 'cancelled'};
       return check.status === 'authenticated' ? {status: 'ok'} : {status: 'unverified', check: check.status};

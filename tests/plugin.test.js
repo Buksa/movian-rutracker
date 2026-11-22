@@ -633,6 +633,23 @@ test('a persistence failure is visible and does not start Password Login', funct
     assert.ok(/сохранить Cloudflare clearance/.test(page.errors[0]));
 });
 
+test('a manual Clearance Refresh rechecks a Session the start-up check left at challenge (#47)', function () {
+    /* Codex on the mirror PR: onOpen() retries only unchecked and
+     * network_error, so :start kept the Cloudflare warning after the refresh. */
+    let reads = 0;
+    const h = load({
+        serverOptions: { cloudflare: true },
+        stores: storedSession(),
+        /* A forced refresh reads the browser's cookie before and after the window. */
+        popup: { web: { result: 'userclose', cookies: function () { return reads++ ? { cf_clearance: fake.CLEARANCE } : {}; }, ua: fake.BROWSER_UA } }
+    });
+    h.flush();
+    assert.strictEqual(h.context.session.status(), 'challenge', 'the start-up check met Cloudflare');
+    const page = h.open('rutracker:refreshclearance');
+    assert.deepStrictEqual(page.redirects, ['rutracker:start']);
+    assert.strictEqual(h.context.session.status(), 'authenticated', 'rechecked after the refresh');
+});
+
 test('failed forced persistence refresh preserves the previously restored pair', function () {
     let reads = 0;
     const h = load({
@@ -2772,27 +2789,88 @@ test('Cookie Bridge: a Forget while its Candidate Check is in flight leaves no S
     assert.ok(!h.notifications.some(function (n) { return /не прошла/.test(n); }), 'not reported as rejected');
 });
 
-test('Password Login: a Forget while its form POST is in flight cancels that login (#41)', function () {
-    /* Codex on the mirror PR: submit() took the generation only after the
-     * POST, so a Forget during the POST did not cancel its late answer. */
-    const site = fake.server();
+/* Runs `during` once, while Password Login's form POST waits; returns the
+ * login page. checksAfterPost counts the Session Checks sent after the POST. */
+function duringPost(during, serverOptions) {
+    const site = fake.server(serverOptions);
     let h;
-    let ran = false;
+    let posted = -1;
     h = load({
         server: function (req) {
-            if (!ran && /login\.php/.test(req.url) && req.method === 'POST') {
-                ran = true;
-                h.open('rutracker:forget');
+            if (posted < 0 && /login\.php/.test(req.url) && req.method === 'POST') {
+                during(h);
+                posted = h.requests.length;
             }
             return site(req);
         },
-        popup: { credentials: [{ username: 'user', password: 'secret-password' }] }
+        popup: { credentials: [USER] }
     });
-    const page = h.open('rutracker:login:' + encodeURIComponent(JSON.stringify({ showAuth: false })));
-    assert.ok(ran, 'the Forget ran during the POST');
+    h.page = h.open(PASSWORD_LOGIN);
+    h.checksAfterPost = h.requests.slice(posted).filter(function (r) { return r.opts.noAuth && /viewforum/.test(r.url); }).length;
+    return h;
+}
+
+test('Password Login: a Forget while its form POST is in flight cancels that login (#41)', function () {
+    /* Codex on the mirror PR: submit() took the generation only after the
+     * POST, so a Forget during the POST did not cancel its late answer. */
+    const h = duringPost(function (h) { h.open('rutracker:forget'); });
+    assert.ok(/отмен/.test(h.page.errors[0] || ''), 'cancelled: ' + h.page.errors.join());
+    assert.strictEqual(h.checksAfterPost, 0, 'the cancelled Candidate is not checked');
     assert.strictEqual(h.context.session.active(), false, 'no Active Session');
     assert.strictEqual(h.context.session.forgotten(), true, 'the Forget still holds');
-    assert.deepStrictEqual(page.redirects, [], 'no return to :start');
+    assert.deepStrictEqual(h.page.redirects, [], 'no return to :start');
+});
+
+test('Password Login: a Clear while its form POST is in flight leaves its login out of the Core Jar too (#41)', function () {
+    /* omp on PR #48: the cancelled POST had put bb_session in the Core Jar, and
+     * without a Forget :start ran signed in as it. */
+    const h = duringPost(function (h) { h.item('rutracker_bridge', 'bridgeClear').action(); });
+    assert.ok(/отмен/.test(h.page.errors[0] || ''), 'cancelled: ' + h.page.errors.join());
+    const t = titles(h.open('rutracker:start'));
+    assert.ok(!t.some(function (s) { return /TestUser/.test(s); }), brief(t));
+});
+
+test('Password Login: a newer sign-in during its form POST wins over it (#46)', function () {
+    /* Codex on the mirror PR: the password attempt took its place only after
+     * the POST, so its late answer replaced a Bridge Session that started later. */
+    const h = duringPost(function (h) { pushSession(h, 'bb_session=' + fake.OTHER_VALID); });
+    assert.ok(/отмен/.test(h.page.errors[0] || ''), 'cancelled: ' + h.page.errors.join());
+    assert.strictEqual(h.checksAfterPost, 0, 'the older Candidate is not checked');
+    assert.strictEqual(h.context.session.user(), fake.OTHER_USER, 'the later sign-in stays Active');
+    assert.deepStrictEqual(h.page.redirects, [], 'the older login does not return to :start');
+});
+
+test('a Password Login that brings no Candidate does not cancel a Candidate Check in flight (#46)', function () {
+    /* omp on PR #48: the ticket took a number at the POST, so a wrong password
+     * or a captcha cancelled an older valid Bridge Candidate (ADR 0002). */
+    [{ loginPage: 'unrecognized' }, { captcha: true }].forEach(function (serverOptions) {
+        const what = JSON.stringify(serverOptions);
+        const h = duringCheck(function (h) { h.open(PASSWORD_LOGIN); }, { serverOptions: serverOptions, popup: { credentials: [USER] } });
+        pushSession(h);
+        assert.ok(h.checkRan(), what + ': the Candidate was checked');
+        assert.strictEqual(h.context.session.active(), true, what + ': the Bridge Candidate is the Active Session');
+    });
+});
+
+test('a Cookie Bridge Session and its Clear do not make a declined password login trusted (#42)', function () {
+    /* omp on PR #48: every save cleared `declined`, so a Bridge Session and
+     * its Clear brought the declined login back from the Core Jar. */
+    let down = true;
+    const site = fake.server();
+    const h = load({
+        server: function (req) {
+            if (down && req.opts && req.opts.noAuth && /viewforum/.test(req.url)) return { status: 503, headers: {}, body: '' };
+            return site(req);
+        },
+        popup: { credentials: [USER] }
+    });
+    h.open(PASSWORD_LOGIN);
+    down = false;
+    pushSession(h, 'bb_session=' + fake.OTHER_VALID);
+    assert.strictEqual(h.context.session.user(), fake.OTHER_USER);
+    h.item('rutracker_bridge', 'bridgeClear').action();
+    const t = titles(h.open('rutracker:start'));
+    assert.ok(!t.some(function (s) { return /TestUser|OtherUser/.test(s); }), brief(t));
 });
 
 test('Cookie Bridge: the "Clear" action while its Candidate Check is in flight leaves no Session and no Clearance', function () {

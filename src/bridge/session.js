@@ -78,9 +78,10 @@ exports.create = function (client, parser, clearance) {
   //  Moved on by a Forget or a Clear: a Candidate Check started before
   //  that is cancelled, one started after it is not (submit()).
   var generation = 0;
-  //  Started submit() and recheck() calls: a later one cancels an earlier
-  //  one still in flight (docs/adr/0002).
-  var submits = 0;
+  //  A later sign-in or recheck() cancels an earlier one still in flight
+  //  (docs/adr/0002). starts numbers every sign-in's start (ticket() or an
+  //  unticketed submit()); latest is the latest start submitted for a check.
+  var starts = 0, latest = 0;
   var rechecks = 0;
 
   function log(msg) {
@@ -91,10 +92,18 @@ exports.create = function (client, parser, clearance) {
     return !active && store.forgotten === true;
   }
 
-  //  A Password Login whose Candidate was declined left its cookies in the
-  //  Core Jar (`declined`, kept in the store): they are not sent either.
+  //  A Password Login POST writes its bb_session into the Core Jar before
+  //  its Candidate is checked. Until a password Candidate is accepted, that
+  //  login is not trusted (`jarUntrusted`, kept in the store): declined,
+  //  cancelled or never checked, it is not sent either. A Cookie Bridge
+  //  Session does not replace the jar's login, so it does not clear this.
   function hidesJar() {
-    return afterForget() || (!active && store.declined === true);
+    return afterForget() || (!active && !!store.jarUntrusted);
+  }
+  //  The marker before `jarUntrusted` (an earlier build of #42).
+  if (store.declined === true) {
+    store.jarUntrusted = store.jarWrites = 1;
+    store.declined = false;
   }
 
   //  `forgotten` is set only by a user's Forget: it hides the Core Jar's
@@ -105,7 +114,6 @@ exports.create = function (client, parser, clearance) {
     //  store.js proxies have no delete trap: overwrite instead.
     store.session = session || '';
     store.forgotten = !session && !!forgotten;
-    if (session) store.declined = false;
   }
 
   //  The Clearance a request to `url` carries for `session` (null: the
@@ -218,14 +226,20 @@ exports.create = function (client, parser, clearance) {
     //  submit() that started meanwhile, whatever its outcome (the later
     //  sign-in wins): {status: 'cancelled'}, nothing saved, and the Active
     //  Session stays as it was before this one (or as Forget or Clear left it).
-    //  A Candidate unusable() rejects at once never reaches its check: it
-    //  takes no number, so it cancels nothing.
-    submit: function (c) {
-      var started = generation;
+    //  A Candidate unusable() rejects at once never reaches its check, so it
+    //  cancels nothing. The order is the start: a Source that waits before
+    //  it has a Candidate (Password Login's POST) passes the ticket() it
+    //  took when it started, and a Candidate started later that was
+    //  submitted first wins over it.
+    submit: function (c, ticket) {
+      var started = ticket ? ticket.started : generation;
+      var mine = ticket ? ticket.start : ++starts;
       var why = unusable(c);
-      var mine = why ? submits : ++submits;
-      var current = function () { return started === generation && mine === submits; };
-      var res = why ? {status: 'rejected', detail: why} : check(c, current);
+      //  A Candidate started after this one was submitted already: this one lost.
+      var stale = !why && mine < latest;
+      if (!why && !stale) latest = mine;
+      var current = function () { return !stale && started === generation && (!!why || mine === latest); };
+      var res = why ? {status: 'rejected', detail: why} : current() ? check(c, current) : null;
       if (!current()) {
         log('candidate from ' + (c && c.source) + ': cancelled by a Forget, Clear or a newer sign-in');
         return {status: 'cancelled'};
@@ -234,8 +248,9 @@ exports.create = function (client, parser, clearance) {
       if (res.status === 'authenticated') {
         save({source: c.source, host: c.host.toLowerCase(), cookie: withoutClearance(c.cookie), ua: c.ua || '', user: res.user});
         status = 'authenticated';
+        //  Only if no other POST wrote the jar since this one did.
+        if (c.jarWrite && c.jarWrite === store.jarUntrusted) store.jarUntrusted = 0;
       }
-      else if (c && c.source === 'password') store.declined = true;
       return res;
     },
 
@@ -253,6 +268,20 @@ exports.create = function (client, parser, clearance) {
       log(c.source + ': adopted from an earlier version');
       setTimeout(startup, 0);
       return true;
+    },
+
+    //  A sign-in starts now: a Forget, a Clear or a Candidate submitted
+    //  before its own submit(ticket) cancels it. It cancels nothing itself.
+    ticket: function () {
+      return {started: generation, start: ++starts};
+    },
+
+    //  A Password Login POST wrote a login into the Core Jar (hidesJar).
+    //  Returns this write's number: the Candidate carries it as jarWrite.
+    untrustJar: function () {
+      store.jarWrites = (store.jarWrites || 0) + 1;
+      store.jarUntrusted = store.jarWrites;
+      return store.jarWrites;
     },
 
     recheck: recheck,
@@ -286,12 +315,6 @@ exports.create = function (client, parser, clearance) {
     //  True after a Forget, until a new Session is Active: the next Password
     //  Login shows Movian's login dialog even with saved credentials (#22).
     forgotten: afterForget,
-
-    //  Moves on at every Forget and Clear: a Source that waits before
-    //  submit() (Password Login's POST) compares it to see it was cancelled.
-    generation: function () {
-      return generation;
-    },
 
     //  Clear (Cookie Bridge): every Candidate Check in flight is cancelled;
     //  the Active Session is left to the caller.

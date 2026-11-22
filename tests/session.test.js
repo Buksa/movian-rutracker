@@ -429,4 +429,45 @@ test('a Candidate rejected at once does not cancel a Candidate still in flight',
     assert.strictEqual(t.session.user(), 'TestUser');
 });
 
+/* ------------------------------------------------------------------ */
+section('session: Password Login tickets and the Core Jar it writes (#46, #42)');
+
+const SIGNED = 'bb_session=' + fake.VALID;
+const SIGNED_OTHER = 'bb_session=' + fake.OTHER_VALID;
+
+test('two Password Logins: the one started later wins, whichever POST answers first', function () {
+    /* omp round 2 on PR #48: the ticket counted submissions, so the first
+     * POST to answer won. */
+    [true, false].forEach(function (olderFirst) {
+        const t = setup();
+        const older = t.session.ticket();
+        const newer = t.session.ticket();
+        const submitOlder = function () { return t.session.submit(candidate({ cookie: SIGNED }), older); };
+        const submitNewer = function () { return t.session.submit(candidate({ cookie: SIGNED_OTHER }), newer); };
+        const first = olderFirst ? submitOlder() : submitNewer();
+        const second = olderFirst ? submitNewer() : submitOlder();
+        assert.strictEqual((olderFirst ? second : first).status, 'authenticated', 'older first: ' + olderFirst);
+        assert.strictEqual((olderFirst ? first : second).status, olderFirst ? 'authenticated' : 'cancelled', 'older first: ' + olderFirst);
+        assert.strictEqual(t.session.user(), fake.OTHER_USER, 'older first: ' + olderFirst);
+    });
+});
+
+test('an accepted Password Login trusts the Core Jar only if no later POST wrote it', function () {
+    /* omp round 2 on PR #48: any accepted password Candidate cleared the
+     * mark, also when a cancelled POST had written the jar after it. */
+    [false, true].forEach(function (laterWrite) {
+        const t = setup();
+        const mine = t.session.untrustJar();
+        if (laterWrite) t.session.untrustJar();
+        assert.strictEqual(t.session.submit(candidate({ cookie: SIGNED, jarWrite: mine })).status, 'authenticated');
+        t.session.drop();
+        assert.strictEqual(t.session.hidesJar(), laterWrite, 'a later write: ' + laterWrite);
+    });
+});
+
+test('the decline marker of an earlier build still hides the Core Jar', function () {
+    const t = setup({ stores: { rutracker_session: { declined: true } } });
+    assert.strictEqual(t.session.hidesJar(), true);
+});
+
 finish();

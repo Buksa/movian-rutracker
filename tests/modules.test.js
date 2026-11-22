@@ -172,7 +172,7 @@ const LOGIN_FAILED = '<h4 class="warnColor1 tCenter mrg_16">Вы ввели не
 function loginWith(answer, check) {
     const submitted = [];
     const client = { host: 'rutracker.org', defaultUA: 'UA/1', login: function () { return answer; } };
-    const session = { generation: function () { return 0; }, submit: function (c) { submitted.push(c); return { status: check }; } };
+    const session = { ticket: function () { return {}; }, untrustJar: function () { return 1; }, submit: function (c) { submitted.push(c); return { status: check }; } };
     const auth = rt.require('./src/business/auth').create(client, parser, session);
     return { result: auth.login('user', 'secret', null), submitted: submitted };
 }
@@ -186,7 +186,7 @@ test('a login answered by a redirect that carries the error marker is failed, no
 test('a login answered by a bare redirect hands its cookies over as a Candidate Session', function () {
     const r = loginWith({ status: 302, text: '', challenge: false, cookie: 'bb_session=s' }, 'authenticated');
     assert.strictEqual(r.result.status, 'ok');
-    assert.deepStrictEqual(plain(r.submitted), [{ source: 'password', host: 'rutracker.org', cookie: 'bb_session=s', ua: 'UA/1' }]);
+    assert.deepStrictEqual(plain(r.submitted), [{ source: 'password', host: 'rutracker.org', cookie: 'bb_session=s', ua: 'UA/1', jarWrite: 1 }]);
 });
 
 test('a login whose Session Check fails is unverified, not ok', function () {

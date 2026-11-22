@@ -519,6 +519,9 @@ exports.register = function (ctx) {
     setup(p, 'Проверка Cloudflare');
     var res = clearance.refresh({title: 'Cloudflare: решите challenge и закройте окно', force: true});
     if (res.status === 'ok') {
+      //  The Active Session's last check may have met Cloudflare: :start
+      //  would keep saying so (onOpen retries only unchecked and network_error).
+      if (ctx.session.active()) ctx.session.recheck();
       p.redirect(PREFIX + ':start');
       return;
     }
