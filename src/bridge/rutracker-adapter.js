@@ -6,6 +6,7 @@
  * Full sessions still go to the Session Coordinator for verification.
  */
 var core = require('../../vendor/movian-cookie-bridge/bridge-core');
+var credentials = require('../api/credentials');
 var bridge = require('../../vendor/movian-cookie-bridge/movian-session');
 var PROFILE = core.profile('rutracker');
 
@@ -13,9 +14,9 @@ var PROFILE = core.profile('rutracker');
 //  official one, else on the profile's default domain: they never go to a
 //  custom mirror.
 function checkHost(baseUrl) {
-  var m = /^https:\/\/([^\/:]+)$/i.exec(baseUrl);
-  for (var i = 0; m && i < PROFILE.domains.length; i++) {
-    if (core.domainMatches(m[1], PROFILE.domains[i])) return m[1].toLowerCase();
+  var host = credentials.hostOf(baseUrl);
+  for (var i = 0; host && i < PROFILE.domains.length; i++) {
+    if (core.domainMatches(host, PROFILE.domains[i])) return host;
   }
   return PROFILE.defaultDomain;
 }
@@ -29,7 +30,6 @@ function notify(text) {
 }
 
 exports.create = function (title, logo, client, session, clearance) {
-  var host = checkHost(client.baseUrl);
   return bridge.create({
     profile: 'rutracker',
     title: title + ' - Cookie Bridge',
@@ -40,6 +40,8 @@ exports.create = function (title, logo, client, session, clearance) {
     //  deferred hand-over cancels it.
     onTransfer: session.ticket,
     onSession: function (cookie, ua, stored, ticket) {
+      //  The domain as of this transfer, not as of start-up.
+      var host = checkHost(client.baseUrl);
       var c = {source: 'bridge', host: host, cookie: cookie, ua: ua};
       if (stored) return session.adopt(c);
       if (!cookie) {

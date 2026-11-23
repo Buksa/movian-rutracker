@@ -73,11 +73,26 @@ function decode(res) {
  * baseUrl: scheme + host of the chosen mirror, without a trailing slash.
  */
 exports.create = function (baseUrl, clearance) {
-  var forum = baseUrl + '/forum/';
-  var baseHostMatch = /^https:\/\/([^\/:]+)$/i.exec(baseUrl);
-  var baseHost = baseHostMatch ? baseHostMatch[1].toLowerCase() : '';
+  var forum, baseHost;
   var coordinator = null;
   var refreshClearance = null;
+  //  One prefix inspector per base URL chosen: kept after a change, so a
+  //  domain no longer chosen still gets the jar suppressed (credentials.js).
+  var prefixInspectors = {};
+  //  Every base URL chosen in this run: a link made on one of them is ours.
+  var chosenBases = [];
+
+  //  The chosen domain. Settings change it at run time (setBaseUrl), so
+  //  everything bound to it is derived here and read at call time.
+  function setBaseUrl(next) {
+    var m = /^https:\/\/([^\/:]+)$/i.exec(next);
+    if (chosenBases.indexOf(next) === -1) chosenBases.push(next);
+    baseUrl = next;
+    baseHost = m ? m[1].toLowerCase() : '';
+    forum = next + '/forum/';
+    if (coordinator) registerPrefixInspector();
+  }
+  setBaseUrl(baseUrl);
   //  Known RuTracker auth cookies plus names observed in later login answers.
   //  Names only; the Core Jar owns all cookie values.
   var coreJarCookieNames = ['bb_session', 'bb_guid', 'bb_ssl', 'cf_clearance'];
@@ -93,14 +108,36 @@ exports.create = function (baseUrl, clearance) {
     }
   }
 
-  function suppressCoreJar(ctrl) {
-    for (var i = 0; i < coreJarCookieNames.length; i++)
+  //  keepClearance: Core's record is the request's Clearance, and it is a
+  //  jar cookie too: blanking cf_clearance would hide it (#58).
+  function suppressCoreJar(ctrl, keepClearance) {
+    for (var i = 0; i < coreJarCookieNames.length; i++) {
+      if (keepClearance && coreJarCookieNames[i] === 'cf_clearance') continue;
       ctrl.setCookie(coreJarCookieNames[i], '');
+    }
   }
 
-  function requestHost(url) {
-    var m = /^https:\/\/([^\/:?#]+)/i.exec(String(url || ''));
-    return m ? m[1].toLowerCase() : '';
+  function applyInspector(ctrl, referer) {
+    var c = credentialsFor(ctrl.url);
+    ctrl.setHeader('Referer', referer);
+    ctrl.setHeader('User-Agent', c.ua);
+    if (c.blankJar) suppressCoreJar(ctrl, c.persisted);
+    else if (c.blankClearance) ctrl.setCookie('cf_clearance', '');
+    for (var i = 0; i < c.cookies.length; i++) {
+      //  setCookie() hides a jar cookie of the same name; jar cookies of
+      //  other names are still sent (http_cookie_append()).
+      ctrl.setCookie(c.cookies[i].name, c.cookies[i].value);
+    }
+    return 0;
+  }
+
+  //  The prefix of the chosen domain, registered once for each base URL.
+  function registerPrefixInspector() {
+    var base = baseUrl;
+    if (prefixInspectors[base]) return;
+    prefixInspectors[base] = io.httpInspectorCreate(escapeRe(base) + PORT_PATH, function (ctrl) {
+      return applyInspector(ctrl, base + '/');
+    });
   }
 
   function credentialsFor(url) {
@@ -156,15 +193,16 @@ exports.create = function (baseUrl, clearance) {
   }
 
   return {
-    baseUrl: baseUrl,
+    get baseUrl() { return baseUrl; },
     //  'rutracker.org' for https://rutracker.org; '' for a plain http one.
-    host: baseHost,
-    forum: forum,
+    get host() { return baseHost; },
+    get forum() { return forum; },
     defaultUA: DEFAULT_UA,
+    setBaseUrl: setBaseUrl,
 
     url: {
-      index: forum + 'index.php',
-      bookmarks: forum + 'bookmarks.php',
+      get index() { return forum + 'index.php'; },
+      get bookmarks() { return forum + 'bookmarks.php'; },
       topic: function (id) { return forum + 'viewtopic.php?t=' + id; },
       subforum: function (id) { return forum + 'viewforum.php?f=' + id; },
       search: function (query, forumId) {
@@ -172,6 +210,15 @@ exports.create = function (baseUrl, clearance) {
       },
       //  Pager links and post links are relative to /forum/.
       resolve: function (href) { return href.indexOf(forum) === -1 ? forum + href : href; },
+      //  A link made on a domain chosen before follows the current one (path
+      //  and query kept); any other URL is returned as it is.
+      rebase: function (href) {
+        for (var i = 0; i < chosenBases.length; i++) {
+          var old = chosenBases[i] + '/forum/';
+          if (old !== forum && href.indexOf(old) === 0) return forum + href.slice(old.length);
+        }
+        return href;
+      },
     },
 
     isolated: isolated,
@@ -221,14 +268,20 @@ exports.create = function (baseUrl, clearance) {
     //  nor Core Jar cookies are sent. The optional clearance pair is the
     //  only Cookie header; response Set-Cookie still reaches the Core Jar.
     login: function (fields) {
-      var clearancePair = clearance && clearance.forUrl(forum + 'login.php');
-      var res = isolated(forum + 'login.php', clearancePair || {cookie: '', ua: DEFAULT_UA}, {
+      //  The host the form went to: the caller checks its Candidate on it.
+      //  Everything the POST is made of is taken now: a refusal of its
+      //  answer is the POST's own (a domain change meanwhile does not move it).
+      var postedHost = baseHost;
+      var postUrl = forum + 'login.php';
+      var postedBase = baseUrl;
+      var clearancePair = clearance && clearance.forUrl(postUrl);
+      var res = isolated(postUrl, clearancePair || {cookie: '', ua: DEFAULT_UA}, {
         method: 'POST',
         postdata: fields,
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
-          'Origin': baseUrl,
-          'Referer': forum + 'login.php',
+          'Origin': postedBase,
+          'Referer': postUrl,
         },
       });
       if (!res) return null;
@@ -236,7 +289,7 @@ exports.create = function (baseUrl, clearance) {
       var text = decode(res);
       rememberCoreJarNames(cookie);
       var met = challenged(res, text);
-      if (met) refused(forum + 'login.php', clearancePair || null);
+      if (met) refused(postUrl, clearancePair || null);
       return {
         status: res.statuscode,
         text: text,
@@ -244,6 +297,7 @@ exports.create = function (baseUrl, clearance) {
         cookie: cookie,
         //  The {cookie, ua} the form went out with, or null.
         clearance: clearancePair || null,
+        host: postedHost,
       };
     },
 
@@ -276,35 +330,20 @@ exports.create = function (baseUrl, clearance) {
      */
     inspect: function (session) {
       coordinator = session;
-      function apply(ctrl, referer) {
-        var c = credentialsFor(ctrl.url);
-        ctrl.setHeader('Referer', referer);
-        ctrl.setHeader('User-Agent', c.ua);
-        if (c.blankJar) suppressCoreJar(ctrl);
-        else if (c.blankClearance) ctrl.setCookie('cf_clearance', '');
-        for (var i = 0; i < c.cookies.length; i++) {
-          //  setCookie() hides a jar cookie of the same name; jar cookies of
-          //  other names are still sent (http_cookie_append()).
-          ctrl.setCookie(c.cookies[i].name, c.cookies[i].value);
-        }
-        return 0;
-      }
-      io.httpInspectorCreate(escapeRe(baseUrl) + PORT_PATH, function (ctrl) {
-        return apply(ctrl, baseUrl + '/');
-      });
+      registerPrefixInspector();
       ['rutracker.org', 'rutracker.net'].forEach(function (domain) {
         //  Match lookalikes too: the Go Core Jar has suffix-only domain
         //  matching, so the callback must suppress it for non-official hosts.
         var pattern = 'https?://[^/:?#]*' + escapeRe(domain) + '[^/:?#]*' + PORT_PATH;
         io.httpInspectorCreate(pattern, function (ctrl) {
-          var host = requestHost(ctrl.url);
+          var host = credentials.hostOf(ctrl.url);
           if (host !== domain && host.slice(-(domain.length + 1)) !== '.' + domain) {
             ctrl.setHeader('User-Agent', DEFAULT_UA);
             suppressCoreJar(ctrl);
             return 0;
           }
-          if (ctrl.url.indexOf(baseUrl + '/') === 0 || ctrl.url === baseUrl) return apply(ctrl, baseUrl + '/');
-          apply(ctrl, 'http://' + domain + '/');
+          if (ctrl.url.indexOf(baseUrl + '/') === 0 || ctrl.url === baseUrl) return applyInspector(ctrl, baseUrl + '/');
+          applyInspector(ctrl, 'http://' + domain + '/');
           ctrl.setHeader('Accept-Language', 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7');
           return 0;
         });

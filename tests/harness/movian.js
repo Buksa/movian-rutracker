@@ -167,9 +167,11 @@ function loadPlugin(opts) {
         webpopups: [],
         authPrompts: [],
         coreStore: opts.coreStore || {},
-        coreRecord: function () {
+        /* The Core record for url: a Core record belongs to the origin it was
+         * stored for (a record without origin is rutracker.org's). */
+        coreRecord: function (url) {
             const w = h.popup.web || {};
-            if (w.core) return h.coreStore.cf_clearance || null;
+            if (w.core) return url ? coreFor(url, 'cf_clearance') : (h.coreStore.cf_clearance || null);
             return w.persistedWebCookie && typeof w.persistedWebCookie === 'object' ? w.persistedWebCookie : null;
         },
         webcookieCalls: [],
@@ -297,6 +299,20 @@ function loadPlugin(opts) {
         return m ? m[1].toLowerCase() : '';
     }
 
+    function recordHost(rec) {
+        return rec.origin ? hostOf(rec.origin) : 'rutracker.org';
+    }
+
+    /* The Core record of url's host: the keyed one ('name@host', kept per
+     * origin), else the flat one when it belongs to that host. */
+    function coreFor(url, name) {
+        const host = hostOf(url);
+        const keyed = h.coreStore[name + '@' + host];
+        if (keyed) return keyed;
+        const flat = h.coreStore[name];
+        return flat && recordHost(flat) === host ? flat : null;
+    }
+
     function allowSite(value, host) {
         (h.cookieSites[value] = h.cookieSites[value] || {})[siteOf(host)] = true;
     }
@@ -321,7 +337,7 @@ function loadPlugin(opts) {
     function heldClearance(url, host, ctrl) {
         const now = Math.floor(Date.now() / 1000);
         if (ctrl.persistedCookies === true) {
-            const rec = /^https:/.test(url) && (host === 'rutracker.org' || host === 'rutracker.net') && h.coreRecord();
+            const rec = /^https:/.test(url) && (host === 'rutracker.org' || host === 'rutracker.net') && h.coreRecord(url);
             return rec && rec.value && !expiredAt(rec.expires, now) ? { value: rec.value, ua: rec.ua } : null;
         }
         const pair = h.stores.rutracker_clearance && h.stores.rutracker_clearance.pair;
@@ -355,8 +371,11 @@ function loadPlugin(opts) {
             Object.assign({}, h.jar[host] || {}, insp.cookies);
         /* Core: the persisted clearance rides only on `persistedCookies: true`,
          * over https to an exact official host; its User-Agent is pinned. */
-        const rec = ctrl.persistedCookies === true && /^https:/.test(url) && h.coreRecord();
-        if (rec && rec.value && (host === 'rutracker.org' || host === 'rutracker.net') &&
+        const rec = ctrl.persistedCookies === true && /^https:/.test(url) && h.coreRecord(url);
+        /* Core's record is a jar cookie: an inspector's setCookie('cf_clearance', '')
+         * hides it too (movian-go fa_http_cookie.go, issue #58). */
+        const hidden = insp.cookies.cf_clearance === '';
+        if (rec && rec.value && !hidden && (host === 'rutracker.org' || host === 'rutracker.net') &&
             !expiredAt(rec.expires, Math.floor(Date.now() / 1000))) {
             cookies.cf_clearance = rec.value;
             if (rec.ua) headers['user-agent'] = rec.ua;
@@ -455,19 +474,26 @@ function loadPlugin(opts) {
                         h.persistWebCookieCalls = (h.persistWebCookieCalls || 0) + 1;
                         const jar = typeof web.cookies === 'function' ? web.cookies(url) : (web.cookies || {});
                         if (!jar[name] || !web.ua) return null;
-                        h.coreStore[name] = { value: jar[name], ua: web.ua,
-                            expires: Math.floor(Date.now() / 1000) + 30 * 86400, path: '/forum', origin: 'https://rutracker.org' };
-                        return Object.assign({}, h.coreStore[name]);
+                        const rec = { value: jar[name], ua: web.ua,
+                            expires: Math.floor(Date.now() / 1000) + 30 * 86400, path: '/forum', origin: new URL(url).origin };
+                        h.coreStore[name] = rec;
+                        h.coreStore[name + '@' + hostOf(url)] = rec;
+                        return Object.assign({}, rec);
                     };
                     m.getPersistedWebCookie = function (url, name) {
                         h.getPersistedWebCookieCalls = (h.getPersistedWebCookieCalls || 0) + 1;
-                        return h.coreStore[name] ? Object.assign({}, h.coreStore[name]) : null;
+                        const rec = coreFor(url, name);
+                        return rec ? Object.assign({}, rec) : null;
                     };
                     m.deletePersistedWebCookie = function (url, name) {
                         h.deletePersistedCalls = (h.deletePersistedCalls || 0) + 1;
-                        const had = !!h.coreStore[name];
-                        delete h.coreStore[name];
-                        return had;
+                        (h.deletePersistedUrls = h.deletePersistedUrls || []).push(url);
+                        const host = hostOf(url);
+                        const keyed = h.coreStore[name + '@' + host];
+                        const flat = h.coreStore[name];
+                        delete h.coreStore[name + '@' + host];
+                        if (flat && recordHost(flat) === host) delete h.coreStore[name];
+                        return !!keyed || !!flat && recordHost(flat) === host;
                     };
                 }
                 else if (web.persistWebCookie !== undefined)

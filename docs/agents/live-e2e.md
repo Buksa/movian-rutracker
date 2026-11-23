@@ -178,6 +178,37 @@ with `curl -X POST -H 'Content-Type: application/zip' --data-binary
 com.moviango.mediaplayer` reads the profile (`files/settings/httpcookies`;
 report names and lengths only).
 
+`tools/live/android.sh <serial> <command>` does these over adb for one phone:
+`install <zip>` (forward to HTTP Control with `--no-rebind`, POST the ZIP,
+compare its sha256 with the copy in `files/mrp/installed` by `run-as`),
+`log-start` / `log-pull <dir>` / `log-stop` (a logcat on the phone, with its
+rotated copy and its PID marker) and `stop` (removes the forward that `install` added, only while its mapping is
+unchanged). A refused forward or logcat is reported, not replaced.
+It has no profile wipe: the phone's Movian Go is not started by it, so a
+clean profile (`am force-stop` and `pm clear com.moviango.mediaplayer`) is the
+owner's step, run only on the owner's word.
+
+Each run logs to a file of its own, `/data/local/tmp/rutracker-live.<run>.log`
+(and its rotated `.log.1`); the marker `rutracker-live.pid` holds the logcat's
+PID, its start time and that file. All are 0600: the remote logcat runs under
+`umask 077` in the same adb command. They may hold the Wi-Fi name. `log-pull`
+copies the marker's files to the host as 0600 and leaves the phone alone;
+`log-stop`, not `log-pull`, deletes them from the phone, and only once nothing
+of that run runs. Check the modes on the phone with `stat` (names and modes
+only) before relying on them.
+
+`log-stop` signals only the process with the marker's PID and start time, and
+only while it runs logcat with the marker's `-f` file: a reused PID is left
+alone. A logcat that does not stop keeps the marker and the files, and
+`log-stop` exits non-zero. `log-start` refuses while a marker is left, live or
+not (`log-pull`, then `log-stop`), and never deletes; a marker naming a file
+outside `rutracker-live.*.log` is refused. `log-start` claims the marker
+(`set -C`) before it starts logcat, so a second one at the same time refuses;
+an empty marker is that claim, and the other commands leave it. A PID whose
+start time cannot be read is not taken as gone: `log-stop` keeps everything. Files of a run without a marker are
+not touched: delete them by hand. `stop` keeps its marker when
+`adb forward --list` fails.
+
 Movian M7 (`com.deanbg.movian` 7.0.281): not debuggable, so `run-as`
 fails, and its STPP answers 403, so no Cookie Bridge push. Install the
 plugin by serving the ZIP on the PC, `adb reverse tcp:<port> tcp:<port>`,
@@ -211,6 +242,36 @@ node tools/live/stpp.js page [max] [--open <route>]   # route, title, loading, e
 `page` prints the current page; `--open <route>` opens the route and waits
 until it has loaded (or failed), exiting 1 after `STPP_WAIT_MS` (15 s) with
 what it has. Do not read the page with `curl` over `/api/prop`.
+
+`set <prop.path> <value>` writes a value (STPP SET), but a multiopt setting
+(`domain`, `list`) reacts only to `select <prop.path> <option id>` (STPP SELECT,
+a binary frame, as the UI selects it). `select` finds the option by its title,
+which must equal its id: that holds for `domain`, not `list` (its titles are
+Russian, and STPP sends no option names). Blocked: Movian Go's
+`mgpp_binary.go:305` selects a child named `""` instead of the option until
+Buksa/movian-go#34 is fixed, so change a multiopt through the settings UI
+meanwhile (the 8.4.1-194 phone check exited 1 with the value unchanged).
+Bool: `set ... value true` reaching its callback is INFERRED (code reading of
+movian-go `settings.js` createBool, JSON `true` arrives as 1), not live-verified.
+
+Before a screenshot, read the state as text (Movian Go 8.4.1-194 on the phone,
+2026-11-22; 20-100 ms and under 1.2 KB a read). `H=localhost:42100/api/prop/global`;
+a prop answers `<name> (ref:N xref:N) is a <value>`:
+
+| Question | Command | Answer |
+|---|---|---|
+| Page, its items, loading, error | `node tools/live/stpp.js page` | route, title, loading, error, items |
+| A dialog is up | `curl -s $H/popups` | `directory` = up, `(void)` = none |
+| Which dialog | `curl -s $H/popups/*0/type` | `auth`, `message`, ...; empty when none |
+| The dialog's text | `curl -s $H/popups/*0/message` (`/reason` for `auth`) | text |
+| Page URL only | `curl -s $H/navigators/current/currentpage/url` | e.g. `page:home` |
+| Video plays | `curl -s $H/media/current/playstatus` | `play`/`pause`/`stop`; `(void)` nothing loaded |
+| App alive, not stuck | `curl -s localhost:42100/api/debug/goroutines \| grep -c glw.GlwStep` | 1 = render loop runs; a pile in `sync.Mutex.Lock` = a stuck lock |
+| CEF/WebView window up | `adb shell dumpsys window \| grep mCurrentFocus` | focus leaves `GLWActivity` while it is up |
+
+The prop tree has no focused widget, no pixels and no CEF/WebView window; take
+a screenshot for those. `global/logbuffer` is the app log: it falls under the
+log-endpoint rule above, not this table.
 
 ## Driving it
 

@@ -1,0 +1,2 @@
+# Follow the `# shellcheck source=` directives of the live kit.
+external-sources=true

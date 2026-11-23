@@ -12,10 +12,13 @@ var core = require('../../vendor/movian-cookie-bridge/bridge-core');
 var DEFAULT_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36';
 var OFFICIAL = ['rutracker.org', 'rutracker.net'];
 
+//  The host of an https URL, lower-case; '' for anything else, a port included
+//  (a Clearance or a Session is never for a port).
 function hostOf(url) {
-  var m = /^https:\/\/([^\/:?#]+)/i.exec(String(url || ''));
+  var m = /^https:\/\/([^\/:?#]+)(?:[\/?#]|$)/i.exec(String(url || ''));
   return m ? m[1].toLowerCase() : '';
 }
+exports.hostOf = hostOf;
 
 //  An official domain or one of its subdomains; not a lookalike such as
 //  evilrutracker.org or rutracker.org.evil.example.

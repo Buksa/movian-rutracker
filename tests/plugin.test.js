@@ -98,7 +98,7 @@ test('settings left by the old public "rutracker" plugin (same id) still work', 
 test(':topic always offers the release torrent item; the torrentLink setting is gone', function () {
     /* "Видимость Torrent-ссылок" hid only this item (the direct dl.php link
      * and the magnets stayed), and an old stored value must not hide it. */
-    const h = load({ settings: { rutracker: { torrentLink: 0 } } });
+    const h = signedIn({ settings: { rutracker: { torrentLink: 0 } } });
     assert.strictEqual(h.item('rutracker', 'torrentLink'), undefined);
     const u = urls(h.open('rutracker:topic:6924363:x'));
     assert.ok(u.indexOf('rutracker:torrent:' + encodeURIComponent('https://rutracker.org/forum/dl.php?t=6924363')) !== -1, u.join('\n'));
@@ -190,7 +190,7 @@ test('a forum page after the first lists its topics, not the subforums again', f
 });
 
 test(':search parses result rows with size, seeders and leechers', function () {
-    const h = load();
+    const h = signedIn();
     const page = h.open('rutracker:search:0:matrix');
     const topics = page.items.filter(function (i) { return /^rutracker:topic:\d+:/.test(i.url); });
     assert.strictEqual(topics.length, 8);
@@ -202,7 +202,7 @@ test(':search parses result rows with size, seeders and leechers', function () {
 });
 
 test('global searcher returns results and a continue item', function () {
-    const h = load();
+    const h = signedIn();
     const page = h.search('matrix');
     assert.strictEqual(page.items.filter(function (i) { return /:topic:/.test(i.url); }).length, 8);
     assert.ok(titles(page).indexOf('Продолжить поиск') !== -1);
@@ -232,12 +232,12 @@ test('the global searcher never opens the Cloudflare window', function () {
 });
 
 test('the global searcher with zero topics from a good search keeps the continue item only', function () {
-    const page = load().search('zzzqqq');
+    const page = signedIn().search('zzzqqq');
     assert.deepStrictEqual(titles(page), ['Продолжить поиск']);
 });
 
 test(':topic offers torrent and magnet items', function () {
-    const h = load();
+    const h = signedIn();
     const page = h.open('rutracker:topic:6924363:' + encodeURIComponent('Знакомьтесь, Джо Блэк'));
     const u = urls(page);
     assert.ok(u.indexOf('rutracker:torrent:' + encodeURIComponent('https://rutracker.org/forum/dl.php?t=6924363')) !== -1, u.join('\n'));
@@ -250,7 +250,7 @@ test(':topic offers torrent and magnet items', function () {
 test(':topic shows the release poster; Movian decodes webp itself', function () {
     /* The old "webp" setting (on by default) replaced every poster with the
      * generic icon. M7 detects WEBP by signature (fa_imageloader.c). */
-    const h = load();
+    const h = signedIn();
     const release = h.open('rutracker:topic:6924363:x').items.filter(function (i) { return i.meta.duration === 'T'; })[0];
     assert.strictEqual(release.meta.icon, 'https://i129.fastpic.org/big/2026/1018/7b/a45a55e1de381f723033e431ffcc7d7b.png');
     assert.strictEqual(h.item('rutracker', 'webp'), undefined, 'setting removed');
@@ -418,7 +418,7 @@ test('a search query with a colon keeps its colon and the forum', function () {
 
 test('an empty search says so and offers the word-start search', function () {
     /* The site matches whole words: "dis" finds nothing, "dis*" does. */
-    const h = load();
+    const h = signedIn();
     const page = h.open('rutracker:search:0:matr');
     assert.deepStrictEqual(titles(page), ['Ничего не найдено', 'Искать начало слова: matr*']);
     assert.strictEqual(page.items[1].url, 'rutracker:search:-1:matr*');
@@ -429,7 +429,7 @@ test('an empty search says so and offers the word-start search', function () {
 });
 
 test('an empty word-start search offers no further retry', function () {
-    const h = load();
+    const h = signedIn();
     assert.deepStrictEqual(titles(h.open('rutracker:search:0:zzz*')), ['Ничего не найдено']);
 });
 
@@ -549,7 +549,7 @@ test(':forum that the site answered with no subforums or topics is an empty foru
 
 test('a later search page the site did not answer is said so, and paging stops', function () {
     ['down', 'challenge'].forEach(function (pagerFailure) {
-        const h = load({ serverOptions: { pagerFailure: pagerFailure } });
+        const h = signedIn({ serverOptions: { pagerFailure: pagerFailure } });
         const page = h.open('rutracker:search:0:matrix');
         assert.strictEqual(page.more, true, pagerFailure);
         assert.strictEqual(page.items.filter(function (i) { return /:topic:/.test(i.url); }).length, 8, pagerFailure);
@@ -718,12 +718,12 @@ test('an HTTP error after the automatic refresh is reported, not taken for a gue
     assert.ok(t.some(function (s) { return /HTTP 503/.test(s); }), brief(t));
     assert.strictEqual(page.more, false, 'paging stops');
 });
-test('an expired Core Jar session after clearance resumes the same forum category through Password Login', function () {
+test('an expired Active Session after clearance resumes the same forum category through Password Login', function () {
     const title = 'Зарубежное кино';
     const route = 'rutracker:forum:7:0:' + encodeURIComponent(title);
     const h = load({
         serverOptions: { cloudflare: true },
-        jar: { 'rutracker.org': { bb_session: 'expired-session' } },
+        stores: expiredSession(),
         popup: { web: { result: 'userclose', cookies: { cf_clearance: fake.CLEARANCE }, ua: fake.BROWSER_UA } }
     });
     const page = h.open(route);
@@ -796,7 +796,7 @@ test('a page that runs while another waits keeps the other page\'s clearance ref
             }
             return site(req);
         },
-        jar: { 'rutracker.org': { bb_session: 'expired-session' } },
+        stores: expiredSession(),
         popup: { web: { result: 'userclose', cookies: { cf_clearance: fake.CLEARANCE }, ua: fake.BROWSER_UA } }
     });
     const page = h.open(route);
@@ -805,11 +805,11 @@ test('a page that runs while another waits keeps the other page\'s clearance ref
     assert.strictEqual(options.resumeUrl, route);
 });
 
-test('an expired Core Jar session after clearance resumes the same topic through Password Login', function () {
+test('an expired Active Session after clearance resumes the same topic through Password Login', function () {
     const route = 'rutracker:topic:6924363:' + encodeURIComponent('Знакомьтесь, Джо Блэк');
     const h = load({
         serverOptions: { cloudflare: true },
-        jar: { 'rutracker.org': { bb_session: 'expired-session' } },
+        stores: expiredSession(),
         popup: { web: { result: 'userclose', cookies: { cf_clearance: fake.CLEARANCE }, ua: fake.BROWSER_UA } }
     });
     const page = h.open(route);
@@ -817,10 +817,10 @@ test('an expired Core Jar session after clearance resumes the same topic through
     const options = JSON.parse(decodeURIComponent(page.redirects[0].slice('rutracker:login:'.length)));
     assert.strictEqual(options.resumeUrl, route);
 });
-test('an expired Core Jar session after clearance resumes the bookmarks through Password Login', function () {
+test('an expired Active Session after clearance resumes the bookmarks through Password Login', function () {
     const h = load({
         serverOptions: { cloudflare: true },
-        jar: { 'rutracker.org': { bb_session: 'expired-session' } },
+        stores: expiredSession(),
         popup: { web: { result: 'userclose', cookies: { cf_clearance: fake.CLEARANCE }, ua: fake.BROWSER_UA } }
     });
     const page = h.open('rutracker:bookmarks');
@@ -835,7 +835,7 @@ test('expired authentication on a forum pagination cursor resumes at that cursor
     const route = 'rutracker:forum:7:50:' + encodeURIComponent(title);
     const h = load({
         serverOptions: { cloudflare: true },
-        jar: { 'rutracker.org': { bb_session: 'expired-session' } },
+        stores: expiredSession(),
         popup: { web: { result: 'userclose', cookies: { cf_clearance: fake.CLEARANCE }, ua: fake.BROWSER_UA } }
     });
     const page = h.open(route);
@@ -848,7 +848,7 @@ test('expired authentication on a topic pagination cursor resumes at that cursor
     const route = 'rutracker:topic:6924363:' + encodeURIComponent('Знакомьтесь, Джо Блэк') + ':50';
     const h = load({
         serverOptions: { cloudflare: true },
-        jar: { 'rutracker.org': { bb_session: 'expired-session' } },
+        stores: expiredSession(),
         popup: { web: { result: 'userclose', cookies: { cf_clearance: fake.CLEARANCE }, ua: fake.BROWSER_UA } }
     });
     const page = h.open(route);
@@ -918,7 +918,7 @@ test('an unsupported CEF challenge leaves a visible Cookie Bridge fallback', fun
 
 
 test('search rows show the size as text, not as a download link', function () {
-    const h = load();
+    const h = signedIn();
     const page = h.open('rutracker:search:0:matrix');
     const d = text(page.items.filter(function (i) { return /:topic:/.test(i.url); })[0].meta.description);
     assert.ok(/Размер: <\/font>18\.45 GB<br>/.test(d), d);
@@ -1531,6 +1531,18 @@ function browserJar(extra) {
     return Object.assign({ bb_guid: 'g1', bb_session: fake.VALID, bb_ssl: '1', cf_clearance: fake.CLEARANCE }, extra || {});
 }
 
+/* An expired Active Session (issue #62): the Session a guest page after a
+ * Clearance Refresh is expected to lose, unlike a jar login the plugin knows nothing of. */
+function expiredSession() {
+    return { rutracker_session: { session: { source: 'password', host: 'rutracker.org',
+        cookie: fake.SESSION + '=expired-session', ua: fake.BROWSER_UA, user: 'TestUser' } } };
+}
+
+/* A signed-in search: the guest answer to a search is the sign-in page now (#62 follow-up). */
+function signedIn(opts) {
+    return load(Object.assign({ jar: { 'rutracker.org': { bb_session: fake.VALID } } }, opts || {}));
+}
+
 function mgo(web, opts) {
     opts = opts || {};
     var popupOptions = Object.assign({
@@ -1540,18 +1552,17 @@ function mgo(web, opts) {
 }
 
 section('plugin: Clearance-Only Login UX');
-test('an expired Core Jar session after clearance acquisition enters Password Login with the original search to resume', function () {
+test('an expired Active Session after clearance acquisition: the search shows its sign-in item, which resumes the search', function () {
+    /* #62 follow-up: a guest search is the sign-in item, not a redirect (owner's request). */
     const h = mgo(undefined, {
-        jar: { 'rutracker.org': { bb_session: 'expired-session' } },
+        stores: expiredSession(),
         popup: { credentials: [USER] }
     });
     const page = h.open('rutracker:search:0:matrix');
     assert.strictEqual(h.webpopups.length, 1, 'clearance is obtained before login');
-    assert.ok(/^rutracker:login:/.test(page.redirects[0] || ''), page.redirects.join());
-    const loginUrl = page.redirects[0];
-    const options = JSON.parse(decodeURIComponent(loginUrl.slice('rutracker:login:'.length)));
-    assert.strictEqual(options.resumeUrl, 'rutracker:search:0:matrix');
-    const login = h.open(loginUrl);
+    assert.deepStrictEqual(page.redirects, [], 'no redirect');
+    assert.strictEqual(page.items[0].url, signInItem('rutracker:search:0:matrix'));
+    const login = h.open(page.items[0].url);
     assert.deepStrictEqual(login.redirects, ['rutracker:search:0:matrix']);
 });
 
@@ -2376,7 +2387,8 @@ test('Forget deletes the persisted Core clearance', function () {
     assert.ok(h.coreStore.cf_clearance, 'stored');
     const page = h.open('rutracker:forget');
     assert.deepStrictEqual(page.redirects, ['rutracker:start']);
-    assert.strictEqual(h.deletePersistedCalls, 1);
+    //  One call per official domain (both are always known, see clearance.js).
+    assert.strictEqual(h.deletePersistedCalls, 2);
     assert.strictEqual(h.coreStore.cf_clearance, undefined);
 });
 
@@ -2387,7 +2399,7 @@ test('Forget also deletes cf_clearance from the browser store, next to the RuTra
     assert.deepStrictEqual(page.redirects, ['rutracker:start']);
     //  JSON: the plugin's arrays come from the vm context, deepStrictEqual would compare realms.
     assert.strictEqual(JSON.stringify(h.deleteCookiesCalls.filter(function (c) { return c.names.indexOf('cf_clearance') !== -1; })),
-        JSON.stringify([{ url: 'https://rutracker.org/forum/', names: ['cf_clearance'] }]));
+        JSON.stringify([{ url: 'https://rutracker.org/forum/', names: ['cf_clearance'] }, { url: 'https://rutracker.net/forum/', names: ['cf_clearance'] }]));
     assert.strictEqual(h.coreStore.cf_clearance, undefined, 'Core record is gone too');
 });
 
@@ -3015,6 +3027,679 @@ test('Password Login: a Cookie Bridge push with only cf_clearance during its Ses
     assert.deepStrictEqual(page.redirects, ['rutracker:start'], 'the login ends signed in');
     assert.strictEqual(h.stores.rutracker_session.session.user, 'TestUser', 'the login\'s Session is saved');
     assert.ok(!h.notifications.some(function (n) { return /начат другой вход/.test(n); }), h.notifications.join(' | '));
+});
+
+section('plugin: the chosen domain applies without a reload (#57)');
+
+function setDomain(h, domain) {
+    h.groups.rutracker.items.domain.value = domain;
+}
+
+function titleOf(item) {
+    const x = item.meta && item.meta.title;
+    return x && x.toRichString ? x.toRichString() : String(x);
+}
+
+//  A custom https mirror is answered by the official site (see the mirror test above).
+function mirrorSite(serverOptions) {
+    const site = fake.server(serverOptions);
+    return function (req) {
+        return site(Object.assign({}, req, { url: req.url.replace('https://mirror.example/', 'https://rutracker.org/') }));
+    };
+}
+
+test('after the domain is changed, the start page and the forum use the new one with no reload', function () {
+    /* Issue #57: the plugin read config.domain once at start-up. */
+    const h = load({ settings: { rutracker: { domain: 'https://rutracker.org' } } });
+    setDomain(h, 'https://rutracker.net');
+    const fromStart = h.requests.length;
+    const start = h.open('rutracker:start');
+    const search = start.items.filter(function (i) { return /:search:/.test(i.url); })[0];
+    assert.strictEqual(titleOf(search), 'Поиск на https://rutracker.net');
+    const startUrls = h.requests.slice(fromStart).map(function (r) { return r.url; });
+    assert.ok(startUrls.indexOf('https://rutracker.net/forum/index.php') !== -1, startUrls.join(' | '));
+    assert.deepStrictEqual(startUrls.filter(function (u) { return /rutracker\.org/.test(u); }), [], 'nothing on rutracker.org');
+    const from = h.requests.length;
+    h.open('rutracker:forum:7:0:x');
+    const forum = h.requests.slice(from).filter(function (r) { return /\/forum\//.test(r.url); });
+    assert.ok(forum.length > 0, 'the forum was requested');
+    forum.forEach(function (r) { assert.ok(r.url.indexOf('https://rutracker.net/forum/') === 0, r.url); });
+});
+
+test('a custom https mirror chosen after start gets the same HTTP inspector as one chosen at start', function () {
+    /* The old domain's inspector goes; the mirror's is registered, as at start. */
+    const serverOptions = { cloudflare: true };
+    const after = load({ serverOptions: serverOptions, server: mirrorSite(serverOptions) });
+    setDomain(after, 'https://mirror.example');
+    const atStart = load({ serverOptions: serverOptions, server: mirrorSite(serverOptions), settings: { rutracker: { domain: 'https://mirror.example' } } });
+    [after, atStart].forEach(function (h) { h.jar['mirror.example'] = { bb_session: 'jar-session' }; });
+    const url = 'https://mirror.example/forum/index.php';
+    function oldPrefix(h) {
+        return h.inspectors.filter(function (i) { return i.raw.indexOf('https://rutracker\\.org(') === 0; }).length;
+    }
+    assert.strictEqual(oldPrefix(after), 1, 'the old domain inspector stays: its requests keep the suppression');
+    const got = [after, atStart].map(function (h) {
+        h.context.require('movian/http').request(url, { noFail: true });
+        const r = h.requests[h.requests.length - 1];
+        return { referer: r.headers.referer, ua: r.headers['user-agent'], cookies: r.cookies };
+    });
+    assert.ok(got[0].referer, 'the mirror inspector set its Referer');
+    assert.deepStrictEqual(got[0], got[1]);
+});
+
+test('a Session or Clearance held for rutracker.org is not sent to a custom mirror chosen after start', function () {
+    const serverOptions = { cloudflare: true };
+    const h = load({ serverOptions: serverOptions, server: mirrorSite(serverOptions) });
+    pushSession(h);
+    setDomain(h, 'https://mirror.example');
+    h.context.require('movian/http').request('https://mirror.example/forum/index.php', { noFail: true });
+    const r = h.requests[h.requests.length - 1];
+    assert.strictEqual(r.cookies.bb_session || '', '', 'no Session');
+    assert.strictEqual(r.cookies.cf_clearance || '', '', 'no Clearance');
+});
+
+test('a Cookie Bridge transfer after the change is checked on the new official host', function () {
+    const h = load({ settings: { rutracker: { domain: 'https://rutracker.org' } } });
+    setDomain(h, 'https://rutracker.net');
+    pushSession(h);
+    assert.strictEqual(h.stores.rutracker_session.session.host, 'rutracker.net');
+    const checks = h.requests.filter(function (r) { return /viewforum\.php/.test(r.url); });
+    assert.ok(checks.length > 0, 'the Session Check ran');
+    assert.ok(checks[checks.length - 1].url.indexOf('https://rutracker.net/forum/') === 0, checks[checks.length - 1].url);
+});
+
+test('a Clearance got on a custom mirror chosen after start is sent to its pages, as at start', function () {
+    /* Round 2 for #57: the mirror's Clearance host and window follow the change. */
+    let reads = 0;
+    const h = mgo({ cookies: function () { return reads++ ? browserJar() : {}; } }, {
+        server: mirrorSite({ cloudflare: true })
+    });
+    setDomain(h, 'https://mirror.example');
+    h.open('rutracker:refreshclearance');
+    assert.strictEqual(h.webpopups.length, 1, 'the clearance window opened');
+    assert.strictEqual(h.webpopups[0].url, 'https://mirror.example/forum/login.php', h.webpopups[0].url);
+    const page = h.open('rutracker:forum:7:0:x');
+    const last = h.requests[h.requests.length - 1];
+    assert.strictEqual(last.cookies.cf_clearance, fake.CLEARANCE, 'the mirror page carries the Clearance');
+    assert.ok(page.items.some(function (i) { return /:topic:/.test(i.url); }), 'the forum loaded past the challenge');
+});
+
+test('a Password Login after the change posts to the new domain with its Origin', function () {
+    /* Origin must follow the domain: a start-up copy would name rutracker.org. */
+    const h = load({ popup: { credentials: [USER] } });
+    setDomain(h, 'https://rutracker.net');
+    h.open(LOGIN);
+    const post = loginPost(h);
+    assert.strictEqual(post.url, 'https://rutracker.net/forum/login.php', post.url);
+    assert.strictEqual(post.headers.origin, 'https://rutracker.net', post.headers.origin);
+});
+
+section('plugin: a persisted Clearance reaches a guest (#58)');
+
+function coreRecord() {
+    return { cf_clearance: { value: fake.CLEARANCE, ua: fake.BROWSER_UA, expires: Math.floor(Date.now() / 1000) + 3600 } };
+}
+
+test('#58: after a Forget, a Clearance from a new window is sent with the guest forum request', function () {
+    /* Live (Movian Go Android, 2026-11-22): the window's clearance was dropped by the blanked jar. */
+    let reads = 0;
+    const h = cfCore({ cookies: function () { return reads++ ? { cf_clearance: fake.CLEARANCE } : {}; } }, { coreStore: {} });
+    h.open('rutracker:forget');
+    h.open('rutracker:refreshclearance');
+    assert.strictEqual(h.webpopups.length, 1, 'the window opened');
+    const page = h.open('rutracker:forum:7:0:x');
+    const sent = h.requests[h.requests.length - 1];
+    assert.strictEqual(sent.cookies.cf_clearance, fake.CLEARANCE, 'the Core clearance is sent');
+    assert.ok(!sent.cookies.bb_session, 'the Core Jar login stays hidden');
+    assert.ok(page.items.some(function (i) { return /:topic:/.test(i.url); }), 'the forum loaded');
+});
+
+test('#58: after an unverified Password Login, the Core clearance still reaches the forum', function () {
+    /* The login POST wrote the jar and was never verified: jarUntrusted hides the jar's login only. */
+    let down = true;
+    const site = fake.server({ cloudflare: true });
+    const h = load({
+        server: function (req) {
+            if (down && req.opts && req.opts.noAuth && /viewforum/.test(req.url)) return { status: 503, headers: {}, body: '' };
+            return site(req);
+        },
+        popup: { credentials: [USER], web: { result: 'userclose', cookies: {}, ua: fake.BROWSER_UA, core: true } },
+        coreStore: coreRecord()
+    });
+    h.open(LOGIN);
+    assert.ok(h.stores.rutracker_session.jarUntrusted, 'the login was never verified');
+    h.open('rutracker:forum:7:0:x');
+    const sent = h.requests[h.requests.length - 1];
+    assert.strictEqual(sent.cookies.cf_clearance, fake.CLEARANCE, 'the Core clearance is sent');
+    assert.ok(!sent.cookies.bb_session, 'the unverified login stays hidden');
+});
+
+test('#58: a guest request to the other official host gets no cf_clearance: the held one is for the base host', function () {
+    /* credentials.js: a Clearance held for another host hides the jar's copy on the other host. */
+    const h = cfCore({ cookies: {} }, { coreStore: coreRecord(), jar: { 'rutracker.org': { bb_session: fake.VALID }, 'rutracker.net': { bb_session: fake.VALID, cf_clearance: 'net-jar-clearance' } } });
+    h.context.require('movian/http').request('https://rutracker.net/forum/index.php', { noFail: true });
+    const other = h.requests[h.requests.length - 1];
+    assert.strictEqual(other.cookies.cf_clearance || '', '', 'no cf_clearance for rutracker.net');
+    assert.strictEqual(other.cookies.bb_session || '', '', 'no login for rutracker.net');
+    h.open('rutracker:forum:7:0:x');
+    assert.strictEqual(h.requests[h.requests.length - 1].cookies.cf_clearance, fake.CLEARANCE, 'the base host gets its Clearance');
+});
+
+section('plugin: a Clearance refresh needs the Clearance for this domain (#59)');
+
+test('#59: a Clearance held for rutracker.org does not satisfy a refresh on rutracker.net: the window opens', function () {
+    /* Live (Movian Go Android, 2026-11-22): no window, one retry, challenged again. */
+    let reads = 0;
+    const h = mgo({ cookies: function () { return reads++ ? browserJar() : {}; } }, { jar: { 'rutracker.net': { bb_session: fake.VALID } } });
+    h.open('rutracker:refreshclearance');
+    assert.strictEqual(h.webpopups.length, 1, 'the rutracker.org window');
+    setDomain(h, 'https://rutracker.net');
+    const page = h.open('rutracker:forum:7:0:x');
+    assert.strictEqual(h.webpopups.length, 2, 'one window for rutracker.net');
+    assert.strictEqual(h.webpopups[1].url, 'https://rutracker.net/forum/login.php', h.webpopups[1].url);
+    assert.strictEqual(h.requests[h.requests.length - 1].cookies.cf_clearance, fake.CLEARANCE, 'the retry carries the new pair');
+    assert.ok(page.items.some(function (i) { return /:topic:/.test(i.url); }), 'the forum loaded');
+});
+
+test('#59: a Password Login on rutracker.net opens its own window when the held Clearance is for rutracker.org', function () {
+    let reads = 0;
+    const h = mgo({ cookies: function () { return reads++ ? browserJar() : {}; } }, { popup: { credentials: [USER] } });
+    h.open('rutracker:refreshclearance');
+    setDomain(h, 'https://rutracker.net');
+    const page = h.open(LOGIN);
+    assert.strictEqual(h.webpopups.length, 2, 'a window for rutracker.net');
+    assert.strictEqual(h.webpopups[1].url, 'https://rutracker.net/forum/login.php', h.webpopups[1].url);
+    assert.deepStrictEqual(page.redirects, ['rutracker:start'], 'the login went through');
+});
+
+section('plugin: review round 4 on 1643877 (omp)');
+
+test('#57 review P1: a domain change during the Password Login POST keeps the Candidate off the new domain', function () {
+    /* omp P1: the Candidate's bb_* went to the Session Check of the domain chosen after the POST. */
+    const site = fake.server();
+    let h;
+    h = load({
+        popup: { credentials: [USER] },
+        server: function (req) {
+            const res = site(req);
+            if (req.postdata && req.postdata.login_username) setDomain(h, 'https://rutracker.net');
+            return res;
+        }
+    });
+    h.open(LOGIN);
+    const sent = h.requests.filter(function (r) { return /^https:\/\/rutracker\.net\//.test(r.url) && r.cookies.bb_session === fake.VALID; });
+    assert.deepStrictEqual(sent.map(function (r) { return r.url; }), [], 'no request to rutracker.net carries the login');
+});
+
+test('#57 review P2: a challenge on the old domain does not touch the new domain\'s Clearance or open its window', function () {
+    /* omp P2: the old request's challenge deleted the records of the domain chosen meanwhile and opened its window. */
+    const site = fake.server({ cloudflare: true });
+    let reads = 0, switched = false, h;
+    h = mgo({ core: true, deletecookies: true, cookies: function () { return reads++ ? browserJar() : {}; } }, {
+        server: function (req) {
+            if (!switched && /rutracker\.org\/forum\/viewforum\.php/.test(req.url) && req.cookies.cf_clearance === fake.CLEARANCE) {
+                switched = true;
+                setDomain(h, 'https://rutracker.net');
+                //  The request that carried the held pair is challenged.
+                return site(Object.assign({}, req, { cookies: {} }));
+            }
+            return site(req);
+        }
+    });
+    h.open('rutracker:refreshclearance');
+    const windows = h.webpopups.length;
+    h.open('rutracker:forum:7:0:x');
+    assert.ok(switched, 'the old request met its challenge after the change');
+    assert.strictEqual(h.webpopups.length, windows, 'no window for rutracker.net: ' + h.webpopups.map(function (w) { return w.url; }).join(' '));
+    assert.deepStrictEqual((h.deletePersistedUrls || []).filter(function (u) { return /rutracker\.net/.test(u); }), [], 'no Core record of rutracker.net deleted');
+    assert.deepStrictEqual((h.deleteCookiesCalls || []).filter(function (c) { return /rutracker\.net/.test(c.url); }), [], 'no browser cookie of rutracker.net deleted');
+});
+
+test('#57 review P2: a Forget after a domain change deletes the Clearance record of the domain it was got for', function () {
+    /* omp P2 (manual Forget): the record for rutracker.org stayed and came back on the next start. */
+    let reads = 0;
+    const h = mgo({ core: true, deletecookies: true, cookies: function () { return reads++ ? browserJar() : {}; } }, {});
+    h.open('rutracker:refreshclearance');
+    assert.ok(h.coreStore.cf_clearance, 'the rutracker.org record is stored');
+    setDomain(h, 'https://rutracker.net');
+    h.open('rutracker:forget');
+    assert.strictEqual(h.coreStore.cf_clearance, undefined, 'the rutracker.org record is forgotten too');
+});
+
+test('#57 review P2: after Forget and a change, a custom mirror chosen before still gets its Core Jar suppressed', function () {
+    /* omp P2: the mirror's only inspector was destroyed on the change, so its direct requests sent the hidden jar. */
+    const serverOptions = { cloudflare: true };
+    const h = load({ serverOptions: serverOptions, server: mirrorSite(serverOptions), settings: { rutracker: { domain: 'https://mirror.example' } } });
+    h.jar['mirror.example'] = { bb_session: 'jar-session', cf_clearance: 'jar-clearance' };
+    h.open('rutracker:forget');
+    setDomain(h, 'https://rutracker.net');
+    h.context.require('movian/http').request('https://mirror.example/forum/index.php', { noFail: true });
+    const r = h.requests[h.requests.length - 1];
+    assert.strictEqual(r.cookies.bb_session || '', '', 'the login is not sent to the old mirror');
+    assert.strictEqual(r.cookies.cf_clearance || '', '', 'nothing is sent to the old mirror');
+});
+
+test('#57 review P2: the next page of an open page is requested from the domain chosen now', function () {
+    /* omp P2: the paginator kept the absolute next URL of the old domain. */
+    const h = load({ server: forumPagerServer() });
+    const page = h.open('rutracker:forum:7:0:x');
+    assert.strictEqual(page.more, true, 'page 1 has a next page');
+    setDomain(h, 'https://rutracker.net');
+    const from = h.requests.length;
+    h.more(page);
+    const next = h.requests.slice(from).filter(function (r) { return /viewforum/.test(r.url); });
+    assert.ok(next.length > 0, 'the next page was requested');
+    assert.ok(next[0].url.indexOf('https://rutracker.net/forum/viewforum.php?f=7&start=50') === 0, next[0].url);
+});
+
+test('#57 review P2: a change to a domain whose Core record is stored uses that record at once, with no window', function () {
+    /* omp P2: the record of the domain chosen was read only at start-up, so a window opened for it. */
+    const record = { cf_clearance: { value: fake.CLEARANCE, ua: fake.BROWSER_UA, expires: Math.floor(Date.now() / 1000) + 3600, origin: 'https://rutracker.net' } };
+    const h = load({
+        serverOptions: { cloudflare: true },
+        popup: { web: { result: 'userclose', cookies: {}, ua: fake.BROWSER_UA, core: true } },
+        coreStore: record
+    });
+    setDomain(h, 'https://rutracker.net');
+    const page = h.open('rutracker:forum:7:0:x');
+    assert.strictEqual(h.webpopups.length, 0, 'no window');
+    const sent = h.requests[h.requests.length - 1];
+    assert.strictEqual(sent.cookies.cf_clearance, fake.CLEARANCE, 'the stored Core clearance is sent');
+    assert.ok(page.items.some(function (i) { return /:topic:/.test(i.url); }), 'the forum loaded');
+});
+
+test('#57 review P3: the start page\'s automatic sign-in looks for the Clearance of the current domain', function () {
+    /* omp P3: a Clearance for rutracker.org hid the redirect to Password Login on rutracker.net. */
+    let reads = 0;
+    const h = mgo({ cookies: function () { return reads++ ? browserJar() : {}; } }, {
+        serverOptions: {},
+        settings: { rutracker: { startAuth: true } }
+    });
+    h.open('rutracker:refreshclearance');
+    setDomain(h, 'https://rutracker.net');
+    const page = h.open('rutracker:start');
+    assert.ok(page.redirects.some(function (r) { return /^rutracker:login:/.test(r); }), 'redirected to Password Login: ' + page.redirects.join(' | '));
+});
+
+section('plugin: review round 5 on 52e44fa (omp round 2)');
+
+test('#57 review round 2 P1: a Login Captcha form posts its password only to the domain it was asked on', function () {
+    /* omp P1: the form opened on rutracker.org posted the password to the mirror chosen after it opened. */
+    const h = load({ server: mirrorSite({ captcha: true }), popup: { credentials: [CAPTCHA_USER] } });
+    const login = h.open('rutracker:login:' + encodeURIComponent(JSON.stringify({ showAuth: false })));
+    const page = h.open(login.redirects[0]);
+    page.metadata.password = 'secret-password';
+    page.metadata.captchaCode = 'ab12';
+    setDomain(h, 'https://mirror.example');
+    const from = h.requests.length;
+    h.deliver(page, 'captchaSubmit');
+    const sent = h.requests.slice(from).filter(function (r) { return r.postdata && r.postdata.login_password; });
+    assert.deepStrictEqual(sent.map(function (r) { return r.url; }), [], 'no password POST after the change');
+    assert.ok(/домен/.test(page.errors[0] || ''), 'the domain message: ' + (page.errors[0] || 'none'));
+});
+
+test('#57 review round 2 P1: a Password Login that started on one domain does not post after a change during its window', function () {
+    /* The decision: the login posts only to the host it started on; a change meanwhile cancels it. */
+    let changed = false, h;
+    h = mgo({ cookies: function () {
+        //  The window's read (after it closes): the domain changes meanwhile.
+        if (!changed) { changed = true; setDomain(h, 'https://rutracker.net'); }
+        return browserJar();
+    } }, { popup: { credentials: [USER] } });
+    const page = h.open(LOGIN);
+    assert.ok(h.webpopups.length >= 1, 'the clearance window opened');
+    const sent = h.requests.filter(function (r) { return r.postdata && r.postdata.login_username; });
+    assert.deepStrictEqual(sent.map(function (r) { return r.url; }), [], 'the login was not posted: ' + sent.map(function (r) { return r.url; }).join(' '));
+    assert.ok(/домен/.test(page.errors[0] || ''), 'the domain message: ' + (page.errors[0] || 'none'));
+});
+
+test('#57 review round 2 P2: a Forget after a restart clears the Core record of a domain chosen in an earlier session', function () {
+    /* omp P2: known hosts lived in memory only, so the record of rutracker.org stayed after a restart on rutracker.net. */
+    const record = { cf_clearance: { value: fake.CLEARANCE, ua: fake.BROWSER_UA, expires: Math.floor(Date.now() / 1000) + 3600, origin: 'https://rutracker.org' } };
+    const web = { result: 'userclose', cookies: {}, ua: fake.BROWSER_UA, core: true };
+    const first = load({ popup: { web: web }, coreStore: record, settings: { rutracker: { domain: 'https://rutracker.org' } } });
+    setDomain(first, 'https://rutracker.net');
+    const second = load({ popup: { web: web }, coreStore: first.coreStore, stores: first.stores, settings: { rutracker: { domain: 'https://rutracker.net' } } });
+    second.open('rutracker:forget');
+    assert.strictEqual(second.coreStore.cf_clearance, undefined, 'the rutracker.org record is forgotten after the restart');
+});
+
+test('#57 review round 2 P2: a Cookie Bridge Clear after a restart clears the Core record of a domain chosen in an earlier session', function () {
+    const record = { cf_clearance: { value: fake.CLEARANCE, ua: fake.BROWSER_UA, expires: Math.floor(Date.now() / 1000) + 3600, origin: 'https://rutracker.org' } };
+    const web = { result: 'userclose', cookies: {}, ua: fake.BROWSER_UA, core: true };
+    const first = load({ popup: { web: web }, coreStore: record, settings: { rutracker: { domain: 'https://rutracker.org' } } });
+    setDomain(first, 'https://rutracker.net');
+    const second = load({ popup: { web: web }, coreStore: first.coreStore, stores: first.stores, settings: { rutracker: { domain: 'https://rutracker.net' } } });
+    second.item('rutracker_bridge', 'bridgeClear').action();
+    assert.strictEqual(second.coreStore.cf_clearance, undefined, 'the rutracker.org record is cleared after the restart');
+});
+
+test('#57 review round 2 P2: a challenge on a Password Login POST refuses the Clearance of the domain it posted to', function () {
+    /* omp P2 (1): the refusal went to the domain chosen meanwhile; the .org record stayed and was reused. */
+    const site = fake.server({ cloudflare: true });
+    const org = { value: fake.CLEARANCE, ua: fake.BROWSER_UA, expires: Math.floor(Date.now() / 1000) + 3600, origin: 'https://rutracker.org' };
+    let h, sentClearance = false;
+    h = load({
+        server: function (req) {
+            if (req.postdata && req.postdata.login_username) {
+                sentClearance = req.cookies.cf_clearance === fake.CLEARANCE;
+                setDomain(h, 'https://rutracker.net');
+                return site(Object.assign({}, req, { cookies: {} }));
+            }
+            return site(req);
+        },
+        popup: { credentials: [USER], web: { result: 'userclose', cookies: {}, ua: fake.BROWSER_UA, core: true } },
+        coreStore: { cf_clearance: org }
+    });
+    h.open(LOGIN);
+    assert.ok(sentClearance, 'the POST carried the rutracker.org Clearance');
+    assert.strictEqual(h.coreStore.cf_clearance, undefined, 'the refused rutracker.org record is deleted');
+});
+
+test('#57 review round 2 P2: a challenge on the old domain drops the refused Clearance it carried, while another domain\'s pair is held', function () {
+    /* omp P2 (2): the carried rutracker.org pair was refused, but the held pair (rutracker.net) hid it, so it was reused on return. */
+    const site = fake.server({ cloudflare: true });
+    const expires = Math.floor(Date.now() / 1000) + 3600;
+    const org = { value: fake.CLEARANCE, ua: fake.BROWSER_UA, expires: expires, origin: 'https://rutracker.org' };
+    const net = { value: 'net-clearance', ua: fake.BROWSER_UA, expires: expires, origin: 'https://rutracker.net' };
+    let h, switched = false;
+    h = load({
+        server: function (req) {
+            if (!switched && /rutracker\.org\/forum\/viewforum/.test(req.url) && req.cookies.cf_clearance === fake.CLEARANCE) {
+                switched = true;
+                setDomain(h, 'https://rutracker.net');
+                return site(Object.assign({}, req, { cookies: {} }));
+            }
+            return site(req);
+        },
+        popup: { web: { result: 'userclose', cookies: {}, ua: fake.BROWSER_UA, core: true } },
+        coreStore: { cf_clearance: org, 'cf_clearance@rutracker.org': org, 'cf_clearance@rutracker.net': net }
+    });
+    h.open('rutracker:forum:7:0:x');
+    assert.ok(switched, 'the carried request was challenged after the change');
+    assert.strictEqual(h.coreStore['cf_clearance@rutracker.org'], undefined, 'the refused rutracker.org record is deleted');
+    assert.strictEqual(h.coreStore['cf_clearance@rutracker.net'], net, 'the rutracker.net record is untouched');
+    setDomain(h, 'https://rutracker.org');
+    const from = h.requests.length;
+    h.open('rutracker:forum:7:0:x');
+    const first = h.requests.slice(from)[0];
+    assert.ok(!first || first.cookies.cf_clearance !== fake.CLEARANCE, 'the refused pair is not sent back on rutracker.org');
+});
+
+test('#57 review round 2 P2: an open topic\'s torrent is downloaded from the domain chosen now', function () {
+    /* omp P2: the torrent item of a page opened on rutracker.org kept that URL after a change. */
+    const site = fake.server();
+    let down = false;
+    const h = load({
+        server: function (req) {
+            if (down && /rutracker\.org/.test(req.url)) return { error: 'Connection refused' };
+            return site(req);
+        }
+    });
+    pushSession(h);
+    const page = h.open('rutracker:topic:6924363:x');
+    const item = page.items.filter(function (i) { return /:torrent:/.test(i.url); })[0];
+    assert.ok(item, 'the topic has a torrent item');
+    setDomain(h, 'https://rutracker.net');
+    down = true;
+    const from = h.requests.length;
+    const got = h.open(item.url);
+    const downloads = h.requests.slice(from).filter(function (r) { return /dl\.php/.test(r.url); });
+    assert.ok(downloads.length > 0, 'the download was requested');
+    assert.ok(downloads[0].url.indexOf('https://rutracker.net/forum/dl.php?t=6924363') === 0, downloads[0].url);
+    assert.strictEqual(got.errors.length, 0, got.errors.join());
+});
+
+test('#57 review round 3 P2: a refusal of the old domain\'s request keeps the new domain\'s held Clearance', function () {
+    /* omp P2: the refused record was dropped with drop(), which cleared the held pair of rutracker.net too. */
+    const expires = Math.floor(Date.now() / 1000) + 3600;
+    const org = { value: fake.CLEARANCE, ua: fake.BROWSER_UA, expires: expires, origin: 'https://rutracker.org' };
+    const net = { value: fake.CLEARANCE, ua: fake.BROWSER_UA, expires: expires, origin: 'https://rutracker.net' };
+    const site = fake.server({ cloudflare: true });
+    let h, switched = false;
+    h = load({
+        server: function (req) {
+            if (!switched && /rutracker\.org\/forum\/viewforum/.test(req.url) && req.cookies.cf_clearance === fake.CLEARANCE) {
+                switched = true;
+                setDomain(h, 'https://rutracker.net');
+                return site(Object.assign({}, req, { cookies: {} }));
+            }
+            return site(req);
+        },
+        popup: { web: { result: 'userclose', cookies: {}, ua: fake.BROWSER_UA, core: true } },
+        coreStore: { cf_clearance: org, 'cf_clearance@rutracker.org': org, 'cf_clearance@rutracker.net': net }
+    });
+    h.open('rutracker:forum:7:0:x');
+    assert.ok(switched, 'the carried request was challenged after the change');
+    assert.strictEqual(h.coreStore['cf_clearance@rutracker.org'], undefined, 'the refused rutracker.org record is deleted');
+    const windows = h.webpopups.length;
+    const from = h.requests.length;
+    const page = h.open('rutracker:forum:7:0:x');
+    const first = h.requests.slice(from).filter(function (r) { return /viewforum/.test(r.url); })[0];
+    assert.ok(first && first.url.indexOf('https://rutracker.net/') === 0, first && first.url);
+    assert.strictEqual(first.cookies.cf_clearance, fake.CLEARANCE, 'the next rutracker.net request carries its Clearance');
+    assert.strictEqual(h.webpopups.length, windows, 'no window opened');
+    assert.ok(page.items.some(function (i) { return /:topic:/.test(i.url); }), 'the forum loaded');
+});
+
+test('#57 review round 3 P2: a profile from before the hosts list still forgets the official domains\' records', function () {
+    /* omp P2: a store with no `hosts` (before a15340e) knew only the current host. */
+    const org = { cf_clearance: { value: fake.CLEARANCE, ua: fake.BROWSER_UA, expires: Math.floor(Date.now() / 1000) + 3600, origin: 'https://rutracker.org' } };
+    const web = { result: 'userclose', cookies: {}, ua: fake.BROWSER_UA, core: true };
+    const forget = load({ popup: { web: web }, coreStore: Object.assign({}, org), stores: { rutracker_clearance: { pair: '' } },
+        settings: { rutracker: { domain: 'https://rutracker.net' } } });
+    forget.open('rutracker:forget');
+    assert.strictEqual(forget.coreStore.cf_clearance, undefined, ':forget deletes the rutracker.org record');
+    const bridge = load({ popup: { web: web }, coreStore: Object.assign({}, org), stores: { rutracker_clearance: { pair: '' } },
+        settings: { rutracker: { domain: 'https://rutracker.net' } } });
+    bridge.item('rutracker_bridge', 'bridgeClear').action();
+    assert.strictEqual(bridge.coreStore.cf_clearance, undefined, 'the bridge Clear deletes the rutracker.org record');
+});
+
+test('#62: a guest who opens a forum section after a Clearance Refresh sees the section, not Password Login', function () {
+    /* Live (Movian Go Android, 2026-11-22): Forget, then forum 511: challenge, window, retry, then a redirect to :login. */
+    const route = 'rutracker:forum:511:0:' + encodeURIComponent('Театр');
+    const h = load({
+        serverOptions: { cloudflare: true },
+        popup: { web: { result: 'userclose', cookies: { cf_clearance: fake.CLEARANCE }, ua: fake.BROWSER_UA } }
+    });
+    const page = h.open(route);
+    assert.strictEqual(h.webpopups.length, 1, 'a Clearance Refresh');
+    assert.deepStrictEqual(page.redirects, [], 'no Password Login');
+    assert.strictEqual(page.items.filter(function (i) { return /:topic:/.test(i.url); }).length, 50, 'the 50 topics of the section');
+});
+
+test('#62: a jar-only bb_session that the site does not know still shows the guest section after a Clearance Refresh', function () {
+    /* No Active Session, so the Jar login is not one the plugin expects. */
+    const route = 'rutracker:forum:511:0:' + encodeURIComponent('Театр');
+    const h = load({
+        serverOptions: { cloudflare: true },
+        jar: { 'rutracker.org': { bb_session: 'expired-session' } },
+        popup: { web: { result: 'userclose', cookies: { cf_clearance: fake.CLEARANCE }, ua: fake.BROWSER_UA } }
+    });
+    const page = h.open(route);
+    assert.strictEqual(h.webpopups.length, 1, 'a Clearance Refresh');
+    assert.deepStrictEqual(page.redirects, [], 'no Password Login');
+    assert.ok(page.items.some(function (i) { return /:topic:/.test(i.url); }), 'the section loaded');
+});
+
+function signInItem(resumeUrl) {
+    return 'rutracker:login:' + encodeURIComponent(JSON.stringify({ showAuth: false, resumeUrl: resumeUrl }));
+}
+
+test('#62 follow-up P1: a guest bookmarks list after a Clearance Refresh goes to Password Login', function () {
+    /* Review finding 1 (live 2026-11-22): bookmarks.php as a guest is the sign-in page. */
+    const h = load({
+        serverOptions: { cloudflare: true },
+        popup: { web: { result: 'userclose', cookies: { cf_clearance: fake.CLEARANCE }, ua: fake.BROWSER_UA } }
+    });
+    const page = h.open('rutracker:bookmarks');
+    assert.strictEqual(h.webpopups.length, 1, 'a Clearance Refresh');
+    assert.deepStrictEqual(page.redirects, [signInItem('rutracker:bookmarks')], 'Password Login, resuming the bookmarks');
+});
+
+const SIGN_IN_TO_SEARCH = 'Поиск доступен после входа: войдите в аккаунт RuTracker';
+test('#62 follow-up P2: a guest local search shows the sign-in item, not an error or a redirect', function () {
+    const h = load();
+    const page = h.open('rutracker:search:0:matrix');
+    assert.deepStrictEqual(page.redirects, [], 'no redirect');
+    assert.strictEqual(page.errors.length, 0, page.errors.join());
+    assert.deepStrictEqual(titles(page), [SIGN_IN_TO_SEARCH]);
+    assert.strictEqual(page.items[0].url, signInItem('rutracker:search:0:matrix'));
+});
+
+test('#62 follow-up P2: a guest local search after a Clearance Refresh still shows the sign-in item', function () {
+    const h = load({
+        serverOptions: { cloudflare: true },
+        popup: { web: { result: 'userclose', cookies: { cf_clearance: fake.CLEARANCE }, ua: fake.BROWSER_UA } }
+    });
+    const page = h.open('rutracker:search:0:matrix');
+    assert.strictEqual(h.webpopups.length, 1, 'a Clearance Refresh');
+    assert.deepStrictEqual(page.redirects, [], 'no redirect');
+    assert.strictEqual(page.errors.length, 0, page.errors.join());
+    assert.deepStrictEqual(titles(page), [SIGN_IN_TO_SEARCH]);
+});
+
+test('#62 follow-up P2: the global searcher as a guest shows the sign-in item', function () {
+    const h = load();
+    const page = h.search('matrix');
+    assert.deepStrictEqual(titles(page), [SIGN_IN_TO_SEARCH]);
+    assert.strictEqual(page.items[0].url, signInItem('rutracker:search:0:matrix'));
+});
+
+test('#62 follow-up P2: signing in from the sign-in item resumes the search', function () {
+    const h = load({ popup: { credentials: [USER] } });
+    const page = h.open('rutracker:search:0:matrix');
+    const login = h.open(page.items[0].url);
+    assert.deepStrictEqual(login.redirects, ['rutracker:search:0:matrix']);
+});
+
+test('#61 tail P2: a Forget during the retry shows the guest section, not Password Login', function () {
+    /* omp: paged() read active() before the request only; the Session is gone by the answer. */
+    const route = 'rutracker:forum:511:0:' + encodeURIComponent('Театр');
+    const site = fake.server({ cloudflare: true });
+    let h, forgot = false;
+    h = load({
+        server: function (req) {
+            if (!forgot && /viewforum\.php\?f=511/.test(req.url) && req.cookies.cf_clearance === fake.CLEARANCE) {
+                forgot = true;
+                h.open('rutracker:forget');
+            }
+            return site(req);
+        },
+        stores: expiredSession(),
+        popup: { web: { result: 'userclose', cookies: { cf_clearance: fake.CLEARANCE }, ua: fake.BROWSER_UA } }
+    });
+    const page = h.open(route);
+    assert.ok(forgot, 'the Forget happened during the retry');
+    assert.deepStrictEqual(page.redirects, [], 'no Password Login');
+    assert.strictEqual(page.items.filter(function (i) { return /:topic:/.test(i.url); }).length, 50, 'the section loaded');
+});
+
+test('#61 tail P2: a sign-in during the retry shows the guest section, not Password Login', function () {
+    /* omp: the answer to the retry was sent with the old Session, but the sign-in made a new one meanwhile. */
+    const route = 'rutracker:forum:511:0:' + encodeURIComponent('Театр');
+    const site = fake.server({ cloudflare: 'pages' });
+    let h, signedIn = false;
+    h = load({
+        server: function (req) {
+            if (!signedIn && /viewforum\.php\?f=511/.test(req.url) && req.cookies.cf_clearance === fake.CLEARANCE) {
+                signedIn = true;
+                h.open(LOGIN);
+            }
+            return site(req);
+        },
+        stores: expiredSession(),
+        popup: { credentials: [USER], web: { result: 'userclose', cookies: { cf_clearance: fake.CLEARANCE }, ua: fake.BROWSER_UA } }
+    });
+    const page = h.open(route);
+    assert.ok(signedIn, 'the sign-in happened during the retry');
+    assert.strictEqual(h.stores.rutracker_session.session.cookie.indexOf(fake.SESSION + '=' + fake.VALID), 0, 'the new Session is held');
+    assert.deepStrictEqual(page.redirects, [], 'no Password Login');
+    assert.strictEqual(page.items.filter(function (i) { return /:topic:/.test(i.url); }).length, 50, 'the section loaded');
+});
+
+test('#61 tail P2: a Session for .org does not send a guest section on .net to Password Login', function () {
+    /* omp: the Active Session does not go to .net, so the guest section is not a lost Session. */
+    const route = 'rutracker:forum:511:0:' + encodeURIComponent('Театр');
+    const h = load({
+        serverOptions: { cloudflare: true },
+        stores: { rutracker_session: { session: { source: 'password', host: 'rutracker.org',
+            cookie: fake.SESSION + '=' + fake.VALID, ua: fake.BROWSER_UA, user: 'TestUser' } } },
+        settings: { rutracker: { domain: 'https://rutracker.net' } },
+        popup: { web: { result: 'userclose', cookies: { cf_clearance: fake.CLEARANCE }, ua: fake.BROWSER_UA } }
+    });
+    const page = h.open(route);
+    assert.strictEqual(h.webpopups.length, 1, 'a Clearance Refresh');
+    assert.deepStrictEqual(page.redirects, [], 'no Password Login');
+    assert.strictEqual(page.items.filter(function (i) { return /:topic:/.test(i.url); }).length, 50, 'the section loaded');
+});
+
+/* A page of a fixture, served as the site serves it (omp's negative repro). */
+function servedPage(name) {
+    return { status: 200, headers: { 'Content-Type': 'text/html; charset=windows-1251' },
+        body: fs.readFileSync(path.join(__dirname, 'fixtures', name), 'utf8') };
+}
+
+test('#61 tail P2: a search answer without the sign-in form shows an error, not the sign-in item', function () {
+    /* omp: any signed-out-looking 200 (here the guest index) made a sign-in item. */
+    const site = fake.server({});
+    const h = load({
+        server: function (req) {
+            if (/tracker\.php/.test(req.url)) return servedPage('index-guest.html');
+            return site(req);
+        },
+        jar: { 'rutracker.org': { bb_session: fake.VALID } }
+    });
+    const page = h.open('rutracker:search:0:matrix');
+    const local = titles(page);
+    assert.ok(local.every(function (t) { return t.indexOf('Поиск доступен после входа') === -1; }), local.join());
+    assert.ok(page.errors.length > 0 || local.some(function (t) { return /Поиск не выполнен/.test(t); }), local.join());
+    const global = titles(h.search('matrix'));
+    assert.ok(global.every(function (t) { return t.indexOf('Поиск доступен после входа') === -1; }), global.join());
+    assert.ok(global.some(function (t) { return /Поиск не выполнен/.test(t); }), global.join());
+});
+
+test('#61 tail P2: a bookmarks answer without the sign-in form does not go to Password Login after a refresh', function () {
+    const site = fake.server({ cloudflare: true });
+    const h = load({
+        server: function (req) {
+            if (/bookmarks\.php/.test(req.url) && req.cookies.cf_clearance === fake.CLEARANCE) return servedPage('index-guest.html');
+            return site(req);
+        },
+        popup: { web: { result: 'userclose', cookies: { cf_clearance: fake.CLEARANCE }, ua: fake.BROWSER_UA } }
+    });
+    const page = h.open('rutracker:bookmarks');
+    assert.strictEqual(h.webpopups.length, 1, 'a Clearance Refresh');
+    assert.deepStrictEqual(page.redirects, [], 'no Password Login');
+    assert.ok(page.errors.length > 0, 'the bookmarks error shows');
+});
+
+test('#61 tail P3: a forum title with a surrogate entity opens the forum without an error', function () {
+    /* omp: &#xD800; was decoded to a lone surrogate and encodeURIComponent(row.title) threw URIError. */
+    const page = fs.readFileSync(path.join(__dirname, 'fixtures', 'forum-511-guest.html'), 'utf8')
+        .replace('>О правилах раздела "Театр"</a>', '>Example &#xD800; title</a>');
+    const site = fake.server({});
+    const h = load({
+        server: function (req) {
+            if (/viewforum\.php\?f=511/.test(req.url) && !/start=/.test(req.url)) {
+                return { status: 200, headers: { 'Content-Type': 'text/html; charset=windows-1251' }, body: page };
+            }
+            return site(req);
+        }
+    });
+    const opened = h.open('rutracker:forum:511:0:' + encodeURIComponent('Театр'));
+    assert.strictEqual(opened.errors.length, 0, opened.errors.join());
+    assert.ok(opened.items.some(function (i) { return /Example &#xD800; title/.test(text(i.meta.title)); }), 'the title is shown as text');
+});
+
+test('#61 tail: a guest topic shows the magnet link and no torrent item', function () {
+    /* The live guest page has only the magnet (div.attach_link.guest), no dl.php. */
+    const h = load();
+    const page = h.open('rutracker:topic:6924363:' + encodeURIComponent('Знакомьтесь, Джо Блэк'));
+    assert.strictEqual(page.errors.length, 0, page.errors.join());
+    assert.ok(page.items.some(function (i) { return /^magnet:\?xt=urn:btih:8759271B/.test(i.url); }), 'the magnet item');
+    assert.strictEqual(page.items.filter(function (i) { return /:torrent:/.test(i.url); }).length, 0, 'no torrent item');
 });
 
 finish();
