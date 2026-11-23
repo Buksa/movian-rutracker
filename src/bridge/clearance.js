@@ -12,6 +12,7 @@
  * desktop, a clearance-only WebView on Android). M7 has neither.
  */
 var core = require('../../vendor/movian-cookie-bridge/bridge-core');
+var credentials = require('../api/credentials');
 var DOMAINS = core.profile('rutracker').domains;
 
 /*
@@ -21,21 +22,50 @@ var DOMAINS = core.profile('rutracker').domains;
 exports.create = function (baseUrl) {
   var pair = null;
   var popup = require('native/popup');
-  var forum = /^https:\/\/[^\/:?#]+$/i.test(baseUrl || '') ? baseUrl + '/forum/' : '';
-  //  A custom https mirror gets its Clearance too.
-  var hosts = forum ? DOMAINS.concat(forum.slice(8, -7).toLowerCase()) : DOMAINS;
-
-  function hostOf(url) {
-    var m = /^https:\/\/([^\/:?#]+)(?:[/?#]|$)/i.exec(String(url || ''));
-    var host = m ? m[1].toLowerCase() : '';
-    for (var i = 0; i < hosts.length; i++) if (host === hosts[i]) return host;
-    return '';
+  var forum = '', hosts = DOMAINS;
+  //  Every https domain chosen so far, earlier sessions included (the store's
+  //  `hosts`, names only): Forget and Clear cover the records of all of them.
+  //  The official ones always count: a store from before `hosts` has none.
+  var known = DOMAINS.slice();
+  function remember(host) {
+    if (known.indexOf(host) !== -1) return;
+    known.push(host);
+    if (store) store.hosts = known.slice();
   }
-  var unsupported = false;
   //  The plugin store adapter, for any domain: a Cookie Bridge clearance is
   //  for an official https host even when an http one is chosen. None
   //  without a site (module tests).
-  var store = baseUrl ? require('movian/store').create('rutracker_clearance') : null;
+  var store = null;
+
+  //  The chosen domain (settings change it at run time). A pair held for
+  //  the old host stays as it is: forUrl() matches it by its own host.
+  function setBaseUrl(next) {
+    forum = /^https:\/\/[^\/:?#]+$/i.test(next || '') ? next + '/forum/' : '';
+    //  A custom https mirror gets its Clearance too.
+    var host = forum ? forum.slice(8, -7).toLowerCase() : '';
+    hosts = host ? DOMAINS.concat(host) : DOMAINS;
+    if (next && !store) {
+      store = require('movian/store').create('rutracker_clearance');
+      (store.hosts || []).forEach(remember);
+    }
+    if (host) remember(host);
+    //  The new domain's Core record is ours unless a pair of that host is held.
+    if (host && !(pair && pair.host === host)) restorePersisted();
+  }
+  setBaseUrl(baseUrl);
+
+  function hostOf(url) {
+    var host = credentials.hostOf(url);
+    for (var i = 0; i < hosts.length; i++) if (host === hosts[i]) return host;
+    return '';
+  }
+  //  A host chosen earlier (a mirror since switched away from): its refusal
+  //  may still delete its records, though nothing is sent to it.
+  function hostOfKnown(url) {
+    var host = credentials.hostOf(url);
+    return known.indexOf(host) !== -1 ? host : '';
+  }
+  var unsupported = false;
 
   function expired(candidate) {
     return candidate && candidate.expires !== undefined && candidate.expires !== null &&
@@ -72,14 +102,27 @@ exports.create = function (baseUrl) {
     if (expires !== undefined && expires !== null) pair.expires = expires;
     keep();
     //  An older Core record would be restored first on the next start.
-    if (!pair.persisted) deletePersisted();
+    if (!pair.persisted) deletePersisted(pair.host);
     return true;
   }
 
-  function deletePersisted() {
-    if (!forum || typeof popup.deletePersistedWebCookie !== 'function') return;
+  function forumOf(host) {
+    return 'https://' + host + '/forum/';
+  }
+
+  //  The records of one host: each deletion acts on the host it names.
+  function deletePersisted(host) {
+    if (!host || typeof popup.deletePersistedWebCookie !== 'function') return;
     try {
-      popup.deletePersistedWebCookie(forum, 'cf_clearance');
+      popup.deletePersistedWebCookie(forumOf(host), 'cf_clearance');
+    }
+    catch (e) {}
+  }
+
+  function deleteBrowser(host) {
+    if (!host || typeof popup.deletecookies !== 'function') return;
+    try {
+      popup.deletecookies(forumOf(host), ['cf_clearance']);
     }
     catch (e) {}
   }
@@ -102,14 +145,30 @@ exports.create = function (baseUrl) {
   //  which covers the forum URL.
   function forget() {
     drop();
-    if (!forum) return;
-    if (typeof popup.deletecookies === 'function') {
-      try {
-        popup.deletecookies(forum, ['cf_clearance']);
-      }
-      catch (e) {}
+    known.forEach(function (host) {
+      deleteBrowser(host);
+      deletePersisted(host);
+    });
+  }
+
+  //  Whether the Core record of host is the pair carried ({cookie, ua}).
+  function storedFor(host, carried) {
+    var rec = null;
+    if (typeof popup.getPersistedWebCookie !== 'function') return false;
+    try {
+      rec = popup.getPersistedWebCookie(forumOf(host), 'cf_clearance');
     }
-    deletePersisted();
+    catch (e) {
+      return false;
+    }
+    return !!rec && !!rec.value && carried.cookie === 'cf_clearance=' + rec.value && carried.ua === rec.ua;
+  }
+
+  //  A dropped pair takes its own host's records, not the chosen domain's.
+  function dropHost(host) {
+    drop();
+    deleteBrowser(host);
+    deletePersisted(host);
   }
 
   function restore(url, value, ua, expires) {
@@ -132,7 +191,9 @@ exports.create = function (baseUrl) {
   //  browser held before). {status}: 'ok' | 'unsupported' | 'neterror' |
   //  'cancelled' | 'empty' | 'persistfailed'.
   function acquire(title, force, reject) {
-    if (current() && !force) return {status: 'ok'};
+    //  Without force, a pair for another host does not count: the window opens.
+    var held = current();
+    if (held && !force && held.host === hostOf(forum)) return {status: 'ok'};
     if (unsupported || !forum || typeof popup.webcookies !== 'function') return {status: 'unsupported'};
     var r, previous, previousUA;
     if (force) {
@@ -198,11 +259,11 @@ exports.create = function (baseUrl) {
     return {status: 'ok'};
   }
 
-  restorePersisted();
   if (!pair && store && store.pair && store.pair.value)
     offer('https://' + store.pair.host + '/forum/', 'cf_clearance=' + store.pair.value, store.pair.ua, store.pair.expires);
 
   return {
+    setBaseUrl: setBaseUrl,
     //  A browser's cookie header (Cookie Bridge): only its cf_clearance is
     //  kept, in memory.
     offer: offer,
@@ -238,14 +299,28 @@ exports.create = function (baseUrl) {
       var now = forUrl(url);
       var same = !!now && !!carried && now.cookie === carried.cookie && now.ua === carried.ua;
       if (now && !same) return {fresher: true, dropped: null};
-      if (now) forget();
-      return {fresher: false, dropped: now || null};
+      if (now) {
+        dropHost(pair.host);
+        return {fresher: false, dropped: now};
+      }
+      //  No pair of this host is held (another host's may be): the carried
+      //  pair is refused when it is still the Core record of this host.
+      var host = hostOf(url) || hostOfKnown(url);
+      //  Only that host's records go: the held pair is another host's.
+      if (carried && host && storedFor(host, carried)) {
+        deleteBrowser(host);
+        deletePersisted(host);
+        return {fresher: false, dropped: carried};
+      }
+      return {fresher: false, dropped: null};
     },
     //  Cookie Bridge's "Clear session": here, in the plugin store and the
     //  Core record, which would come back on the next start.
     clear: function () {
       drop();
-      deletePersisted();
+      known.forEach(function (host) {
+        deletePersisted(host);
+      });
     },
   };
 };

@@ -14,6 +14,7 @@
  * memory only.
  */
 var core = require('../../vendor/movian-cookie-bridge/bridge-core');
+var credentials = require('../api/credentials');
 var movianSession = require('../../vendor/movian-cookie-bridge/movian-session');
 var classify = movianSession.classify;
 var challenged = movianSession.challenged;
@@ -193,9 +194,8 @@ exports.create = function (client, parser, clearance) {
   //  The Active Session goes over https only: a Cookie Bridge Session to
   //  the official domains, as it always did, any other to its own host.
   function appliesTo(url) {
-    var m = /^https:\/\/([^\/:?#]+)/i.exec(String(url || ''));
-    if (!active || !m) return false;
-    var host = m[1].toLowerCase();
+    var host = credentials.hostOf(url);
+    if (!active || !host) return false;
     return active.source === 'bridge' ? official(host) : host === active.host;
   }
 

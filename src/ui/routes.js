@@ -100,6 +100,9 @@ exports.register = function (ctx) {
     challenge: function () {
       return 'Вход не выполнен: сайт требует проверку Cloudflare. ' + ELSEWHERE;
     },
+    domain: function () {
+      return 'Вход отменён: домен выбран другой во время входа. Пароль не запрашивается снова.';
+    },
     insecure: function () {
       return 'Вход по паролю возможен только по https: выберите https-домен в настройках плагина.';
     },
@@ -132,8 +135,18 @@ exports.register = function (ctx) {
     return url === PREFIX + ':bookmarks' ||
       new RegExp('^' + PREFIX + ':(search|forum|topic):').test(String(url || ''));
   }
+  function stateUrl(state, stateParams) {
+    return PREFIX + ':' + state + ':' + encodeURIComponent(JSON.stringify(stateParams));
+  }
   function redirectTo(p, state, stateParams) {
-    return p.redirect(PREFIX + ':' + state + ':' + encodeURIComponent(JSON.stringify(stateParams)));
+    return p.redirect(stateUrl(state, stateParams));
+  }
+  //  A search the guest cannot make: the item opens Password Login, then the search.
+  function signInItem(p, resumeUrl) {
+    p.appendItem(stateUrl('login', {showAuth: false, resumeUrl: resumeUrl}), 'directory', {
+      title: new RichText('Поиск доступен после входа: войдите в аккаунт RuTracker'),
+      icon: icon.arrow,
+    });
   }
 
   //  A page that got no response at all is said so, not shown as an empty one.
@@ -148,17 +161,27 @@ exports.register = function (ctx) {
    * entries per page, fetch(url, n) loads page n (counted from the url's
    * start=), render(result, n) adds its
    * items and returns false to stop, resume(start) is the route back to the
-   * page whose start= is given ('' for none). A Clearance Refresh that
-   * brings back a guest page means the Session is gone: Password Login,
-   * then back to that page.
+   * page whose start= is given ('' for none). After a Clearance Refresh, a
+   * page goes to Password Login (then back to that page) when the Session
+   * that applied to its URL is still there and the answer is no longer
+   * signed in; loginList (bookmarks) goes there on the sign-in page alone.
+   * A sign-in page of any other list is not redirected (search shows an item).
    */
-  function paged(p, url, size, fetch, render, resume) {
+  function paged(p, url, size, fetch, render, resume, loginList) {
     var start = /[?&]start=([0-9]+)/.exec(url);
     var n = start ? Math.floor(start[1] / size) : 0;
     function loader() {
+      //  A next page taken on another domain follows the one chosen now.
+      url = client.url.rebase(url);
+      //  The Session that applies to this URL before the request (null: none).
+      var before = ctx.session.forUrl(url);
       p.loading = true;
       var result = fetch(url, n + 1);
       p.loading = false;
+      //  Still the same Session after the answer: a Forget, a sign-in or a
+      //  hand-over meanwhile means the answer is not a lost Session (#61 tail).
+      var after = ctx.session.forUrl(url);
+      var lost = !!before && !!after && after.cookie === before.cookie;
       //  No response, the challenge again or an HTTP error is not a guest
       //  page: a warning shows, not Password Login.
       if (result.clearanceRefreshed && (result.challenge || result.httpError)) {
@@ -167,7 +190,10 @@ exports.register = function (ctx) {
           'Сайт не вернул страницу после обновления проверки Cloudflare (HTTP ' + result.httpError + '): откройте страницу снова', red))});
         return p.haveMore(false);
       }
-      if (result.clearanceRefreshed && !result.user && !result.network) {
+      //  A login-only list (bookmarks) goes to Password Login on its sign-in
+      //  page; any other list only when the Session it needed is lost.
+      var toLogin = loginList ? result.signIn : lost && !result.signIn;
+      if (result.clearanceRefreshed && toLogin && !result.user && !result.network) {
         var at = /[?&]start=([^&]+)/.exec(url);
         redirectTo(p, 'login', {showAuth: false, resumeUrl: resume(at ? at[1] : '')});
         return p.haveMore(false);
@@ -200,7 +226,8 @@ exports.register = function (ctx) {
     s.onOpen();
     var index = catalog.index();
     //  Read after the requests: a Forget during either has dropped the Clearance.
-    var hasClearance = clearance && clearance.active();
+    //  The Clearance of this domain's index page, not of any domain.
+    var hasClearance = !!clearance && !!clearance.forUrl(client.url.index);
     p.loading = false;
     if (s.active()) {
       p.appendItem('', 'separator', {
@@ -283,6 +310,10 @@ exports.register = function (ctx) {
       //  Movian's global search: no Cloudflare window over the user's search.
       var result = catalog.search(client.url.search(query), true);
       p.loading = false;
+      if (result.signIn) {
+        signInItem(p, PREFIX + ':search:0:' + query);
+        return;
+      }
       if (!result.loaded) {
         p.appendItem('', 'separator', {title: 'Поиск не выполнен: сайт не вернул результаты (сеть или проверка Cloudflare)'});
         return;
@@ -317,6 +348,10 @@ exports.register = function (ctx) {
     paged(p, client.url.search(query, forumId), 50, function (url) {
       return catalog.search(url);
     }, function (result, n) {
+      if (result.signIn) {
+        signInItem(p, PREFIX + ':search:' + (routeForumId || '0') + ':' + query);
+        return false;
+      }
       if (!topicCount && !result.topics.length) {
         nothingFound(result.loaded);
         return false;
@@ -374,7 +409,7 @@ exports.register = function (ctx) {
       });
     }, function () {
       return PREFIX + ':bookmarks';
-    });
+    }, true);
   });
 
   new page.Route(PREFIX + ':forum:(.*):(.*):(.*)', function (p, forumId, forumPage, forumTitle) {
@@ -506,7 +541,8 @@ exports.register = function (ctx) {
 
   new page.Route(PREFIX + ':torrent:(.*)', function (p, dlHref) {
     setup(p);
-    var res = client.torrent(decodeURIComponent(dlHref));
+    //  A link of the item may name the domain chosen before (routes: appendRelease).
+    var res = client.torrent(client.url.rebase(decodeURIComponent(dlHref)));
     if (res.error) {
       p.error(res.error === 'network' ? 'Не удалось скачать торрент: сетевая ошибка' :
         'Не удалось скачать торрент: сайт вернул страницу вместо файла (нужен вход?)');
@@ -535,10 +571,13 @@ exports.register = function (ctx) {
   new page.Route(PREFIX + ':login:(.*)', function (p, options) {
     setup(p, 'Вход на ' + TTL);
     options = JSON.parse(decodeURIComponent(options));
+    //  The domain this sign-in started on: it posts only there.
+    var startHost = client.host;
     //  After a Forget the first sign-in always shows Movian's login dialog,
     //  even with saved credentials: Movian would take them silently (#22).
     if (ctx.session.forgotten()) options.showAuth = true;
-    if (!clearance.active() && clearance.available()) {
+    //  refresh() is ok at once when the held Clearance is for this domain.
+    if (clearance.available()) {
       var acquired = clearance.refresh({title: 'Cloudflare: ждите закрытия окна после получения clearance'});
       if (acquired.status !== 'ok') {
         p.error(CLEARANCE_ERRORS[acquired.status] ? CLEARANCE_ERRORS[acquired.status]() :
@@ -550,6 +589,10 @@ exports.register = function (ctx) {
       var credentials = popup.getAuthCredentials(TTL + ' (' + client.baseUrl + ')', 'Требуется авторизация, введите логин и пароль', options.showAuth);
       if (credentials.rejected) return;
       if (credentials) {
+        if (client.host !== startHost) {
+          p.error(LOGIN_ERRORS.domain());
+          return;
+        }
         p.loading = true;
         var result = ctx.auth.login(credentials.username, credentials.password);
         p.loading = false;
@@ -558,7 +601,7 @@ exports.register = function (ctx) {
           return;
         }
         if (result.status === 'captcha') {
-          redirectTo(p, 'captcha', {captcha: result.captcha, username: credentials.username, resumeUrl: options.resumeUrl || ''});
+          redirectTo(p, 'captcha', {captcha: result.captcha, host: result.host, username: credentials.username, resumeUrl: options.resumeUrl || ''});
           return;
         }
         options.showAuth = result.status === 'failed';
@@ -622,10 +665,15 @@ exports.register = function (ctx) {
       if (!username || !password || !code) return;
       //  An error page keeps the metadata, so the password must not stay in it.
       p.metadata.password = '';
+      //  The form posts only to the domain that asked for it.
+      if (state.host !== client.host) return p.error(LOGIN_ERRORS.domain());
       p.loading = true;
       var result = ctx.auth.login(username, password, {sid: state.captcha.sid, field: state.captcha.field, value: code});
       p.loading = false;
-      if (result.status === 'captcha') return ask(result.captcha);
+      if (result.status === 'captcha') {
+        state.host = result.host;
+        return ask(result.captcha);
+      }
       if (LOGIN_ERRORS[result.status]) return p.error(LOGIN_ERRORS[result.status](result));
       if (result.status === 'failed') return redirectTo(p, 'login', {showAuth: true, resumeUrl: state.resumeUrl});
       p.redirect(safeResumeUrl(state.resumeUrl) ? state.resumeUrl : PREFIX + ':start');

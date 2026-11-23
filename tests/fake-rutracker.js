@@ -109,6 +109,8 @@ function server(options) {
         case '/forum/index.php':
             return html(authed ? 'index.html' : 'index-guest.html', false, other ? OTHER_USER : undefined);
         case '/forum/viewforum.php':
+            /* Section 511 as a guest is the real page (issue #62). */
+            if (u.searchParams.get('f') === '511' && !authed) return html('forum-511-guest.html', true);
             return html(options.emptyForum ? 'forum-203.html' : 'forum-7.html', !authed, other ? OTHER_USER : undefined);
         case '/forum/tracker.php': {
             /* Like the site: whole words, or a word start with "*". This one
@@ -117,13 +119,18 @@ function server(options) {
             const known = nm === null || nm.toLowerCase().split(/[^a-z*]+/).some(function (w) {
                 return w === 'matrix' || (w.length > 1 && w.slice(-1) === '*' && 'matrix'.indexOf(w.slice(0, -1)) === 0);
             });
-            const page = html('search-matrix.html', !authed);
+            //  A guest gets the sign-in page (issue #62 follow-up, live 2026-11-22).
+            if (!authed) return html('login-guest.html', true);
+            const page = html('search-matrix.html', false);
             return known ? page : emptySearch(page);
         }
         case '/forum/viewtopic.php':
-            return html('topic-6924363.html', !authed);
+            /* A guest sees only the magnet link of this release (live, 2026-11-22). */
+            if (!authed) return html('topic-6924363-guest.html', true);
+            return html('topic-6924363.html', false);
         case '/forum/bookmarks.php':
-            return html('bookmarks-empty.html', !authed);
+            if (!authed) return html('login-guest.html', true);
+            return html('bookmarks-empty.html', false);
         case '/forum/dl.php':
             if (!authed) return html('index-guest.html');
             return { status: 200, headers: { 'Content-Type': 'application/x-bittorrent' }, body: TORRENT };

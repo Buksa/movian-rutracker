@@ -34,6 +34,11 @@ var config = require('./src/ui/settings').register(plugin, LOGO);
 var parser = require('./src/api/parser');
 var clearance = require('./src/bridge/clearance').create(config.domain);
 var client = require('./src/api/client').create(config.domain, clearance);
+//  The chosen domain applies from the next request on, with no reload.
+config.onDomain(function (domain) {
+  clearance.setBaseUrl(domain);
+  client.setBaseUrl(domain);
+});
 
 //  Full browser sessions go through the coordinator. The experimental
 //  clearance-only pair is attached separately and is never stored there.
@@ -45,6 +50,8 @@ client.setClearanceRefresh(function (url, carried) {
   //  the one this request carried (another page replaced it meanwhile).
   var got = clearance.challengedWith(url, carried);
   if (got.fresher) return true;
+  //  A page of another domain (the one chosen before) gets no window here.
+  if (url.indexOf(client.forum) !== 0) return false;
   //  The dropped pair went everywhere, the browser's copy included, so the
   //  window cannot hand the same one back.
   var now = got.dropped;

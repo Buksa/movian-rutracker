@@ -29,9 +29,19 @@ function first(re, text) {
   return m ? m[1] : '';
 }
 
-//  Markup and the entities RuTracker uses in titles and posts.
+//  Markup and the entities RuTracker uses in titles and posts. Numeric
+//  entities are decoded here, once, in the same pass as &amp;, so
+//  "&amp;#252;" stays the text "&#252;". A code point that is no character
+//  (0, a surrogate, past U+FFFF) stays as written: a lone surrogate would
+//  make encodeURIComponent() of a title throw.
 function cleanText(s) {
-  return String(s).replace(/<.*?>/g, '').replace(/&nbsp;/g, '').replace(/&quot;/g, '"').replace(/&laquo;/g, '«').replace(/&raquo;/g, '»').replace(/(&amp;|\\u0026)/g, '&').replace(/&#039;/g, '`').replace(/–/g, '-').trim();
+  return String(s).replace(/<.*?>/g, '').replace(/&nbsp;/g, '').replace(/&quot;/g, '"').replace(/&laquo;/g, '«').replace(/&raquo;/g, '»')
+    .replace(/&(amp|#[0-9]+|#[xX][0-9a-fA-F]+);/g, function (m, e) {
+      if (e === 'amp') return '&';
+      var code = /^#[xX]/.test(e) ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+      return code > 0 && code <= 0xFFFF && (code < 0xD800 || code > 0xDFFF) ? String.fromCharCode(code) : m;
+    })
+    .replace(/\\u0026/g, '&').replace(/–/g, '-').trim();
 }
 
 //  A post's HTML as one line of text.
@@ -40,7 +50,6 @@ function htmlToText(s) {
     .replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, ' ')
     .replace(/<!--[\s\S]*?-->/g, ' ')
     .replace(/<[^>]*>/g, ' ')
-    .replace(/&#(\d+);/g, function (m, code) { return String.fromCharCode(+code); })
     .replace(/&middot;/g, '·')
     .replace(/&darr;/g, '↓')
     .replace(/\s+/g, ' '));
@@ -108,6 +117,15 @@ exports.searchResults = function (text) {
 //  Is this a bookmarks.php page? An empty list says so in a message; a list
 //  with topics has the topic rows of a forum page, which bookmarks share. A
 //  challenge or a guest page has neither.
+//  The sign-in page itself: its full login form (login-form-full, action
+//  login.php). The quick form on public pages does not count.
+exports.loginPage = function (text) {
+  var forms = String(text || '').match(/<form\b[^>]*>/gi) || [];
+  return forms.some(function (f) {
+    return /\sid="login-form-full"/.test(f) && /\saction="login\.php"/.test(f);
+  });
+};
+
 exports.bookmarksPage = function (text) {
   text = String(text || '');
   return /У вас нет избранных тем/.test(text) || exports.topicRows(text, 'forum').length > 0;

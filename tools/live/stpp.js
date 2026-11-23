@@ -14,6 +14,19 @@
  *                                                   and prints what it has
  *   node tools/live/stpp.js set <prop.path> <value> write one property (STPP SET);
  *                                                   value is JSON, else a string
+ *   node tools/live/stpp.js select <prop.path> <option id>
+ *                                                   select a multiopt's option (STPP SELECT,
+ *                                                   a binary frame). The option is found by its
+ *                                                   title, which must equal its id: true for the
+ *                                                   domain setting, not for `list` (Russian
+ *                                                   titles; STPP sends no option names). Prints
+ *                                                   "already selected" when the value is the id;
+ *                                                   otherwise waits STPP_WAIT_MS from connect for
+ *                                                   the value to become the id, else exits 1.
+ *                                                   Blocked: Movian Go's mgpp_binary.go:305
+ *                                                   selects a child "" instead of the option
+ *                                                   until Buksa/movian-go#34 is fixed; change
+ *                                                   a multiopt through the settings UI meanwhile
  *
  * The port comes from $PORT, else from $LIVE_DIR/port written by start.sh.
  * A browser session is pushed with m7-cookie-bridge/tools/orca-session-push.js
@@ -65,6 +78,77 @@ function set(propPath, raw) {
         ws.send(JSON.stringify([3, 0, propPath, value])); /* SET */
         setTimeout(function () { ws.close(); process.exit(0); }, 400);
     });
+}
+
+/* Movian Go's STPP has SELECT only as a binary frame: [8, propRef as uint32 LE]
+ * (internal/api/mgpp/mgpp_binary.go:288). Its JSON side announces an option by ref
+ * alone (ADDNODES, mgpp_subjson.go:15) and never sends the option's name, so the
+ * option is found by its title and the title must equal the id: that holds for the
+ * domain setting, not for `list`, whose titles are Russian. The value Movian sends
+ * back is compared with the id. The whole wait ends STPP_WAIT_MS after connect. */
+function select(propPath, optionId) {
+    var next = 100;
+    var subs = {};
+    var titles = {};  /* ref -> title */
+    var found = null; /* ref of the option titled optionId */
+    var current;      /* the multiopt value, as Movian last sent it */
+    var sent = false;
+    var waitMs = parseInt(process.env.STPP_WAIT_MS || '15000', 10);
+    var ws;
+    function sub(ws, propref, path, cb) {
+        var id = next++;
+        subs[id] = cb;
+        ws.send(JSON.stringify([1, id, propref, path])); /* SUBSCRIBE */
+    }
+    function done(code, msg) {
+        console[code ? 'error' : 'log'](msg);
+        ws.close();
+        process.exit(code);
+    }
+    /* Once the option and the value are known: an option already selected sends nothing. */
+    function step() {
+        if (found === null || current === undefined || sent) return;
+        if (current === optionId) done(0, 'already selected ' + optionId);
+        sent = true;
+        var frame = Buffer.alloc(5);
+        frame[0] = 8; /* SELECT */
+        frame.writeUInt32LE(found, 1);
+        ws.send(frame);
+    }
+    ws = connect(function (ws) {
+        sub(ws, 0, propPath + '.value', function (v) {
+            current = v;
+            if (sent && v === optionId) done(0, 'changed to ' + optionId);
+            step();
+        });
+        sub(ws, 0, propPath + '.options', function (msg) {
+            if (!msg || msg[0] !== 5 || !Array.isArray(msg[3])) return; /* ADDNODES */
+            msg[3].forEach(function (ref) {
+                sub(ws, ref, 'title', function (title) {
+                    titles[ref] = title;
+                    if (title === optionId && found === null) {
+                        found = ref;
+                        step();
+                    }
+                });
+            });
+        });
+        setTimeout(function () {
+            if (found === null) {
+                done(1, 'no option titled ' + JSON.stringify(optionId) + ' under ' + propPath + '.options; have ' +
+                    JSON.stringify(Object.keys(titles).map(function (ref) { return titles[ref]; })));
+            } else if (!sent) {
+                done(1, 'no value from ' + propPath + '.value');
+            } else {
+                done(1, propPath + '.value is ' + JSON.stringify(current) + ' after SELECT, not ' + JSON.stringify(optionId));
+            }
+        }, waitMs);
+    });
+    ws.onmessage = function (e) {
+        var m = parseFrame(String(e.data));
+        if (!m || !subs[m[1]]) return;
+        subs[m[1]](m[0] === 4 ? m[2] : m); /* NOTIFY carries the value */
+    };
 }
 
 function openRoute(route) {
@@ -178,7 +262,7 @@ function page(max, route) {
 }
 
 function usage() {
-    console.error('usage: stpp.js open <route> | page [max] [--open <route>] | set <prop.path> <value>');
+    console.error('usage: stpp.js open <route> | page [max] [--open <route>] | set <prop.path> <value> | select <prop.path> <option id>');
     process.exit(2);
 }
 
@@ -187,6 +271,7 @@ function main() {
     var args = process.argv.slice(3);
     if (cmd === 'open' && args[0]) return open(args[0]);
     if (cmd === 'set' && args[0] && args[1] !== undefined) return set(args[0], args[1]);
+    if (cmd === 'select' && args[0] && args[1] !== undefined) return select(args[0], args[1]);
     if (cmd !== 'page') return usage();
     var max = 20;
     var route = null;

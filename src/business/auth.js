@@ -29,12 +29,15 @@ exports.create = function (client, parser, session) {
       var jarWrite = /(^|;\s*)bb_session=/.test(res.cookie || '') ? session.untrustJar() : 0;
       if (res.challenge) return {status: 'challenge'};
       var asked = parser.captcha(res.text);
-      if (asked) return {status: 'captcha', captcha: asked};
+      //  The host that asked: its form posts only there (routes.js captcha).
+      if (asked) return {status: 'captcha', captcha: asked, host: res.host};
       //  A good login is answered with a redirect (the request does not
       //  follow it); the form again, or any other page, is not a login.
       var redirected = res.status >= 300 && res.status < 400;
       if (!redirected || parser.loginFailed(res.text)) return {status: 'failed'};
-      var check = session.submit({source: 'password', host: client.host, cookie: res.cookie, ua: res.clearance ? res.clearance.ua : client.defaultUA, jarWrite: jarWrite}, ticket);
+      //  The domain changed during the POST: the Candidate is not checked on another host.
+      if (res.host !== client.host) return {status: 'domain'};
+      var check = session.submit({source: 'password', host: res.host, cookie: res.cookie, ua: res.clearance ? res.clearance.ua : client.defaultUA, jarWrite: jarWrite}, ticket);
       //  A Forget, Clear or newer sign-in meanwhile: this login is not wanted any more.
       if (check.status === 'cancelled') return {status: 'cancelled'};
       return check.status === 'authenticated' ? {status: 'ok'} : {status: 'unverified', check: check.status};

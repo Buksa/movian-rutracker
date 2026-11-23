@@ -22,9 +22,14 @@ function baseUrl(v) {
 
 exports.register = function (plugin, logo) {
   var config = {};
+  var domainListeners = [];
   function printDebug(message) {
     if (config.debug) console.error(message);
   }
+  //  fn(domain) on every change of the domain, not at registration.
+  config.onDomain = function (fn) {
+    domainListeners.push(fn);
+  };
 
   //  `new`: a plain call would turn the shared settings module itself into
   //  this group (settings.js keeps the group on `this`).
@@ -38,12 +43,12 @@ exports.register = function (plugin, logo) {
   };
   group.createBool('debug', 'Отладка (debug)', false, function (v) {config.debug = v});
   group.createString('domain0', 'Домен (базовый URL без завершающего "/" в конце)', 'https://rutracker.org', function (v) {config.domain0 = v});
-  //  Read once at start-up: a new domain applies after the plugin reloads.
   group.createMultiOpt('domain', 'Выбор домена', [[config.domain0, config.domain0, true]].concat(MIRRORS.map(function (u) {
     return [u, u];
   })), function (v) {
     printDebug('Установите домен на ' + v);
     config.domain = baseUrl(v);
+    domainListeners.forEach(function (fn) { fn(config.domain); });
   });
   group.createMultiOpt('list', 'Отображение списка', [
     ['directory', 'Общим списком'],

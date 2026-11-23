@@ -58,17 +58,21 @@ exports.create = function (client, parser) {
         loaded: parser.bookmarksPage(text),
         topics: forumTopics(text),
         next: next(text, 'bottom_info'),
+        signIn: parser.loginPage(text),
       }, got);
     },
 
-    //  noRefresh: see client.page().
+    //  noRefresh: see client.page(). signIn: the site answered a guest with
+    //  its sign-in page (not a page that failed to load).
     search: function (url, noRefresh) {
       var got = client.page(url, noRefresh), text = got.text;
-      return withPage({
+      var result = withPage({
         loaded: parser.searchResults(text),
         topics: parser.topicRows(text, 'tracker'),
         next: next(text, 'bottom_info'),
       }, got);
+      result.signIn = parser.loginPage(text);
+      return result;
     },
 
     //  A topic page. On the first page the opening post is the release

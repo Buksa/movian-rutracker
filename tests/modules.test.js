@@ -68,6 +68,40 @@ test('topicRows parses forum rows', function () {
     assert.strictEqual(release.size, '2.75 GB');
 });
 
+test('topicRows reads the 50 topics of guest forum 511 (#62)', function () {
+    const rows = parser.topicRows(fixture('forum-511-guest.html'), 'forum');
+    assert.strictEqual(rows.length, 50);
+    rows.forEach(function (r) { assert.ok(r.topicId && r.title, JSON.stringify(r)); });
+});
+
+test('a topic title decodes numeric entities: &#252; is ü and &#039; is an apostrophe (#2200 audit)', function () {
+    /* Live, forum 2200 (guest): "Gr&#252;ner wird&#039;s n" was shown as is. The row is forum 511's real markup with that title. */
+    const page = fixture('forum-511-guest.html').replace('>О правилах раздела "Театр"</a>', '>Gr&#252;ner wird&#039;s n</a>');
+    assert.ok(page.indexOf('Gr&#252;ner') !== -1, 'the title was replaced');
+    const rows = parser.topicRows(page, 'forum');
+    assert.strictEqual(rows[0].title, "Grüner wird's n");
+});
+
+test('loginPage: the full sign-in form of the real sign-in page, not the quick form of a public page (#61 tail)', function () {
+    assert.strictEqual(parser.loginPage(fixture('login-guest.html')), true);
+    assert.strictEqual(parser.loginPage(fixture('index-guest.html')), false);
+    assert.strictEqual(parser.loginPage(fixture('forum-511-guest.html')), false);
+    assert.strictEqual(parser.loginPage(fixture('forum-7.html')), false);
+    assert.strictEqual(parser.loginPage(''), false);
+});
+
+test('a post decodes its numeric entities once: "&#38;#252;" stays "&#252;" (#61 tail P3)', function () {
+    const page = parser.topicPage('<div class="post_body">&#38;#252; &#x26;#x41;</div><!--/post_body-->', false);
+    assert.strictEqual(page.comments[0], '&#252; &#x41;');
+});
+
+test('numeric entities that are no character stay text: &#0; and a surrogate (#61 tail P3)', function () {
+    const rows = parser.topicRows(fixture('forum-511-guest.html').replace('>О правилах раздела "Театр"</a>', '>Ex &#xD800; &#0; t</a>'), 'forum');
+    assert.strictEqual(rows[0].title, 'Ex &#xD800; &#0; t');
+    const page = parser.topicPage('<div class="post_body">a &#0; b &#xDC00;</div><!--/post_body-->', false);
+    assert.strictEqual(page.comments[0], 'a &#0; b &#xDC00;');
+});
+
 test('nextPage finds the "След." pager link or reports the last page', function () {
     assert.ok(/^tracker\.php\?search_id=.*start=50$/.test(parser.nextPage(parser.parse(fixture('search-matrix.html')), 'bottom_info')));
     assert.strictEqual(parser.nextPage(parser.parse(fixture('forum-7.html')), 'bottom_info'), null);
@@ -165,6 +199,40 @@ test('expired clearance is discarded during request lookup and never crosses hos
     assert.strictEqual(helper.forUrl('https://rutracker.org.evil.test/forum/'), null);
 });
 
+test('a refusal of a custom mirror drops its record after the switch to another domain (#57 review round 3 P2)', function () {
+    /* omp P2 (VM): the mirror is no longer in `hosts`, so its refusal named no host. */
+    const expires = Math.floor(Date.now() / 1000) + 3600;
+    const coreStore = {
+        'cf_clearance@mirror.example': { value: 'mirror-clearance', ua: 'BrowserUA/1', expires: expires, origin: 'https://mirror.example' },
+        'cf_clearance@rutracker.net': { value: 'net-clearance', ua: 'BrowserUA/1', expires: expires, origin: 'https://rutracker.net' },
+    };
+    const vm = loadPlugin({ pluginDir: ROOT, entry: false,
+        popup: { web: { result: 'userclose', cookies: {}, ua: 'BrowserUA/1', core: true } }, coreStore: coreStore });
+    const clearance = vm.require('./src/bridge/clearance').create('https://mirror.example');
+    const carried = clearance.forUrl('https://mirror.example/forum/');
+    assert.ok(carried, 'the mirror pair is held');
+    clearance.setBaseUrl('https://rutracker.net');
+    assert.strictEqual(clearance.forUrl('https://rutracker.net/forum/').cookie, 'cf_clearance=net-clearance');
+    const got = clearance.challengedWith('https://mirror.example/forum/', carried);
+    assert.ok(got.dropped, 'the refused mirror pair is dropped');
+    assert.strictEqual(coreStore['cf_clearance@mirror.example'], undefined, 'the mirror record is deleted');
+    assert.strictEqual(clearance.forUrl('https://rutracker.net/forum/').cookie, 'cf_clearance=net-clearance', 'the rutracker.net pair is kept');
+});
+
+test('hostOf: the lower-case host of an https URL, none for a port, http or nothing', function () {
+    const hostOf = rt.require('./src/api/credentials').hostOf;
+    assert.strictEqual(hostOf('https://RuTracker.ORG/forum/viewforum.php?f=7'), 'rutracker.org');
+    assert.strictEqual(hostOf('https://rutracker.org?x=1'), 'rutracker.org');
+    assert.strictEqual(hostOf('https://rutracker.org#top'), 'rutracker.org');
+    assert.strictEqual(hostOf('https://rutracker.org'), 'rutracker.org');
+    assert.strictEqual(hostOf('https://rutracker.org:8443/forum/'), '');
+    assert.strictEqual(hostOf('http://rutracker.org/forum/'), '');
+    assert.strictEqual(hostOf('https://rutracker.org.evil.test/'), 'rutracker.org.evil.test');
+    assert.strictEqual(hostOf('https://'), '');
+    assert.strictEqual(hostOf(''), '');
+    assert.strictEqual(hostOf(undefined), '');
+});
+
 section('business/auth');
 
 const LOGIN_FAILED = '<h4 class="warnColor1 tCenter mrg_16">Вы ввели неверное имя или пароль</h4>';
@@ -192,7 +260,8 @@ test('the session stub names only methods the real Session Coordinator has (#50)
 
 function loginWith(answer, check) {
     const submitted = [];
-    const client = { host: 'rutracker.org', defaultUA: 'UA/1', login: function () { return answer; } };
+    //  client.login answers with the host the form went to.
+    const client = { host: 'rutracker.org', defaultUA: 'UA/1', login: function () { return Object.assign({ host: 'rutracker.org' }, answer); } };
     const auth = rt.require('./src/business/auth').create(client, parser, sessionStub(submitted, check));
     return { result: auth.login('user', 'secret', null), submitted: submitted };
 }
