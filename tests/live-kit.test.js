@@ -302,6 +302,43 @@ test('--check fails when the copy list lacks a file the tests read, and leaves t
     }
 });
 
+test('a sync fails when the mirror check fails though its tests pass, and keeps the sync base', function () {
+    /* Retro 2026-11-22: the sync ran only the tests in the mirror, so a config
+     * CODE lacked (.shellcheckrc) failed ShellCheck there unnoticed. A stub mise
+     * fails `run check`; the copied tests themselves pass. */
+    if (!SYNCABLE) return;
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sync-public-'));
+    const env = {};
+    Object.keys(process.env).forEach(function (k) { if (k.indexOf('GIT_') !== 0) env[k] = process.env[k]; });
+    const git = function (cwd, args) {
+        const res = spawnSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', '-c', 'core.hooksPath=/dev/null'].concat(args), { cwd: cwd, env: env, encoding: 'utf8' });
+        assert.strictEqual(res.status, 0, args.join(' ') + ': ' + res.stderr);
+    };
+    try {
+        const repo = path.join(dir, 'repo');
+        const pub = path.join(dir, 'pub');
+        const bin = path.join(dir, 'bin');
+        git(dir, ['clone', '-q', ROOT, repo]);
+        const script = path.join(repo, 'tools/sync-public.sh');
+        fs.writeFileSync(script, fs.readFileSync(path.join(ROOT, 'tools/sync-public.sh'), 'utf8'));
+        git(repo, ['commit', '-q', '--allow-empty', '-am', 'the sync script under test']);
+        fs.mkdirSync(pub);
+        git(pub, ['init', '-q']);
+        git(pub, ['remote', 'add', 'origin', 'https://github.com/Buksa/movian-rutracker.git']);
+        fs.mkdirSync(bin);
+        fs.writeFileSync(path.join(bin, 'mise'), '#!/bin/sh\n[ "$1 $2" = "run check" ] || exit 0\necho "✗ shellcheck – ERROR"\nexit 1\n', { mode: 0o755 });
+        const res = spawnSync('sh', [script, pub], { env: Object.assign({}, env, { PATH: bin + path.delimiter + env.PATH }), encoding: 'utf8' });
+        assert.strictEqual(res.status, 1, res.stdout + res.stderr);
+        assert.ok(/mise run check fails in the mirror/.test(res.stderr) && /✗ shellcheck/.test(res.stderr), res.stderr);
+        assert.ok(!fs.existsSync(path.join(repo, '.codex/public-sync-base')), 'the sync base moved on a failed check');
+        const log = /full log: (\S+)\)/.exec(res.stderr);
+        if (log) fs.rmSync(log[1], { force: true });
+    }
+    finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
 section('tools/live/stpp.js');
 
 (async function () {
