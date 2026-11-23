@@ -3,7 +3,7 @@
 Авторизация RuTracker.org в **Movian M7 (7.x)** через сессию браузера,
 без `webpopup`/WebView и без изменений ядра.
 
-**Версии:** плагин `RuTracker.org 0.10.0` (форк апстримной 0.7.7), расширение
+**Версии:** плагин `RuTracker.org 0.11.0` (форк апстримной 0.7.7), расширение
 `Movian Cookie Bridge 0.5.0`, Movian-модуль Bridge `2.0.0`
 (`vendor/movian-cookie-bridge/`). История — `CHANGELOG.md`.
 
@@ -81,7 +81,7 @@ vendor`. `api/client.js` получает Session Coordinator параметро
 ### Плагин
 
 1. Собрать архивы: `m7-cookie-bridge/tools/package.sh` →
-   `m7-cookie-bridge/dist/RuTracker.org-0.10.0-m7-bridge.zip` (каталог `dist/`
+   `m7-cookie-bridge/dist/RuTracker.org-0.11.0-m7-bridge.zip` (каталог `dist/`
    в репозиторий не входит).
 2. Установить ZIP в Movian как плагин. Для разработки: `movian -p <repo>`
    (в dev-режиме ядро пишет в лог всё, включая значения cookies, — см.
